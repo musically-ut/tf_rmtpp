@@ -9,7 +9,7 @@ tf_rmtpp
    :target:
    :alt: Latest Travis CI build status
 
-Recurrent Marked Temporal Point Processes in Tensorflow.
+Recurrent Marked Temporal Point Processes in TensorFlow.
 
 Usage
 -----
@@ -24,7 +24,7 @@ Installation
 Requirements
 ^^^^^^^^^^^^
 
-  - ``Tensorflow``
+  - ``TensorFlow``
   - ``pandas``
 
 Compatibility

@@ -8,7 +8,7 @@ setuptools.setup(
     author="Utkarsh Upadhyay",
     author_email="musically.ut@gmail.com",
 
-    description="Recurrent Marked Temporal Point Processes in Tensorflow",
+    description="Recurrent Marked Temporal Point Processes in TensorFlow",
     long_description=open('README.rst').read(),
 
     packages=setuptools.find_packages(),
