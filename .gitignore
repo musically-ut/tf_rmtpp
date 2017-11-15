@@ -1,3 +1,7 @@
+#### joe made this: http://goel.io/joe
+
+#####=== Python ===#####
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -21,6 +25,7 @@ parts/
 sdist/
 var/
 wheels/
+
 *.egg-info/
 .installed.cfg
 *.egg
@@ -45,6 +50,7 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+*,cover
 
 # Translations
 *.mo
