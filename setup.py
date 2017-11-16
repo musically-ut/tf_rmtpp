@@ -11,7 +11,8 @@ setuptools.setup(
     description="Recurrent Marked Temporal Point Processes in TensorFlow",
     long_description=open('README.rst').read(),
 
-    packages=setuptools.find_packages(),
+    packages=setuptools.find_packages('src'),
+    package_dir={'': 'src'},
 
     install_requires=[],
 
