@@ -1,4 +1,6 @@
-import tensorflow as tf
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+import itertools
+
 
 def read_data(event_train_file, event_test_file, time_train_file, time_test_file):
     """Read data from given files and return it as a dictionary."""
@@ -18,8 +20,8 @@ def read_data(event_train_file, event_test_file, time_train_file, time_test_file
     assert len(timeTrain) == len(eventTrain)
     assert len(eventTest) == len(timeTest)
 
-    nb_samples = len(eventTrain)
-    max_seqlen = max(len(x) for x in eventTrain)
+    # nb_samples = len(eventTrain)
+    # max_seqlen = max(len(x) for x in eventTrain)
     unique_samples = set()
 
     for x in eventTrain + eventTest:
@@ -62,4 +64,3 @@ def read_data(event_train_file, event_test_file, time_train_file, time_test_file
         'test_time_in_seq': test_time_in_seq,
         'test_time_out_seq': test_time_out_seq,
     }
-
