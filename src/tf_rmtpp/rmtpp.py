@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 import decorated_options as Deco
 
 def_opts = Deco.Options(
@@ -11,6 +12,7 @@ def_opts = Deco.Options(
     float_type=tf.float32,
     seed=42,
     scope="RMTPP",
+    num_epochs=5,
 
     bptt=10
 )
@@ -20,9 +22,9 @@ class RMTPP:
     """Class implementing the Recurrent Marked Temporal Point Process model."""
 
     @Deco.optioned()
-    def __init__(self, num_categories, hidden_layer_size, batch_size,
+    def __init__(self, sess, num_categories, hidden_layer_size, batch_size,
                  learning_rate, momentum, l2_penalty, embed_size,
-                 float_type, bptt, seed, scope):
+                 float_type, bptt, seed, scope, num_epochs):
         self.HIDDEN_LAYER_SIZE = hidden_layer_size
         self.BATCH_SIZE = batch_size
         self.LEARNING_RATE = learning_rate
@@ -34,8 +36,12 @@ class RMTPP:
         self.NUM_CATEGORIES = num_categories
         self.FLOAT_TYPE = float_type
 
-        with tf.variable_scope(scope):
+        self.sess = sess
+        self.seed = seed
+        self.num_epochs = num_epochs
+        self.last_epoch = 0
 
+        with tf.variable_scope(scope):
             with tf.device('/gpu:0'):
                 # Make input variables
                 self.events_in = tf.placeholder(tf.int32, [self.BATCH_SIZE, self.BPTT])
@@ -149,7 +155,14 @@ class RMTPP:
 
                 self.final_state = state
                 # optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.001)
-                self.optimizer = tf.train.AdamOptimizer(learning_rate=0.001)
+
+                self.new_learning_rate = tf.placeholder(name='new_learning_rate', shape=(1,))
+                self.learning_rate = tf.get_variable(name='learning_rate', shape=(1,), trainable=False,
+                                                     initializer=tf.constant_initializer(self.LEARNING_RATE))
+                self.update_lr = tf.assign(self.learning_rate, self.new_learning_rate, name='update_lr')
+
+                self.optimizer = tf.train.AdamOptimizer(learning_rate=self.LEARNING_RATE,
+                                                        beta1=self.MOMENTUM)
                 # update = optimizer.minimize(loss)
 
                 # Performing manual gradient clipping.
@@ -166,8 +179,68 @@ class RMTPP:
                 self.init = tf.global_variables_initializer()
                 self.check_nan = tf.add_check_numerics_ops()
 
-    def train(self, training_data):
-        pass
+    def train(self, trainingData, check_nans=False):
+        rs = np.random.RandomState(seed=self.seed)
+
+        train_event_in_seq = trainingData['train_event_in_seq']
+        train_time_in_seq = trainingData['train_time_in_seq']
+        train_event_out_seq = trainingData['train_event_out_seq']
+        train_time_out_seq = trainingData['train_event_out_seq']
+
+        idxes = list(range(len(train_event_in_seq)))
+
+        self.sess.run(self.init)
+
+        for epoch in range(self.last_epoch, self.last_epoch + self.num_epochs):
+            rs.shuffle(idxes)
+
+            self.sess.run(self.update_lr, {
+                self.new_learning_rate: self.LEARNING_RATE / (epoch + 1)
+            })
+
+            print("Starting epoch...", epoch)
+
+            for batch_idx in range(len(idxes) // self.BATCH_SIZE):
+                batch_idxes = idxes[batch_idx * self.BATCH_SIZE:(batch_idx + 1) * self.BATCH_SIZE]
+                batch_event_train_in = train_event_in_seq[batch_idxes, :]
+                batch_event_train_out = train_event_out_seq[batch_idxes, :]
+                batch_time_train_in = train_time_in_seq[batch_idxes, :]
+                batch_time_train_out = train_time_out_seq[batch_idxes, :]
+
+                cur_state = np.zeros((self.BATCH_SIZE, self.HIDDEN_LAYER_SIZE))
+                total_loss = 0.0
+
+                for bptt_idx in range(0, len(batch_event_train_in[0]) - self.BPTT, self.BPTT):
+                    bptt_range = range(bptt_idx, (bptt_idx + self.BPTT))
+                    bptt_event_in = batch_event_train_in[:, bptt_range]
+                    bptt_event_out = batch_event_train_out[:, bptt_range]
+                    bptt_time_in = batch_time_train_in[:, bptt_range]
+                    bptt_time_out = batch_time_train_out[:, bptt_range]
+
+                    feed_dict = {
+                        self.initial_state: cur_state,
+                        self.events_in: bptt_event_in,
+                        self.events_out: bptt_event_out,
+                        self.times_in: bptt_time_in,
+                        self.times_out: bptt_time_out
+                    }
+
+                    if check_nans:
+                        _, _, cur_state, loss_ = \
+                            self.sess.run([self.check_nan, self.update,
+                                           self.final_state, self.loss],
+                                          feed_dict=feed_dict)
+                    else:
+                        _, cur_state, loss_ = \
+                            self.sess.run([self.update,
+                                           self.final_state, self.loss],
+                                          feed_dict=feed_dict)
+                    total_loss += loss_
+
+                if batch_idx % 10 == 0:
+                    print('Loss on last batch = {}'.format(total_loss))
+
+        self.last_epoch += self.num_epochs
 
     def predict(self, test_data):
         pass
