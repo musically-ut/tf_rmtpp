@@ -3,12 +3,12 @@ import numpy as np
 import decorated_options as Deco
 
 def_opts = Deco.Options(
-    hidden_layer_size=128,  # 64, 128, 256, 512, 1024
-    batch_size=28,          # 16, 32, 64
+    hidden_layer_size=64,   # 64, 128, 256, 512, 1024
+    batch_size=64,          # 16, 32, 64
     learning_rate=0.1,      # 0.1, 0.01, 0.001
     momentum=0.9,
     l2_penalty=0.001,
-    embed_size=100,
+    embed_size=64,
     float_type=tf.float32,
     seed=42,
     scope="RMTPP",
@@ -154,14 +154,13 @@ class RMTPP:
                                          lambda: 0.0)
 
                 self.final_state = state
-                # optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.001)
 
                 with tf.device('/cpu:0'):
                     # Global step needs to be on the CPU (Why?)
                     self.global_step = tf.Variable(0, name='global_step', trainable=False)
 
                 self.learning_rate = tf.train.inverse_time_decay(self.LEARNING_RATE, global_step=self.global_step,
-                                                                 decay_steps=1, decay_rate=1.0)
+                                                                 decay_steps=10.0, decay_rate=.001)
                 self.increment_global_step = tf.assign(
                     self.global_step,
                     self.global_step + 1,
@@ -196,8 +195,8 @@ class RMTPP:
             # after initialization.
             self.sess.graph.finalize()
 
-
     def train(self, trainingData, check_nans=False):
+        """Train the model given the training data."""
         rs = np.random.RandomState(seed=self.seed)
 
         train_event_in_seq = trainingData['train_event_in_seq']
@@ -206,13 +205,15 @@ class RMTPP:
         train_time_out_seq = trainingData['train_event_out_seq']
 
         idxes = list(range(len(train_event_in_seq)))
+        n_batches = len(idxes) // self.BATCH_SIZE
 
         for epoch in range(self.last_epoch, self.last_epoch + self.num_epochs):
             rs.shuffle(idxes)
 
             print("Starting epoch...", epoch)
+            total_loss = 0.0
 
-            for batch_idx in range(len(idxes) // self.BATCH_SIZE):
+            for batch_idx in range(n_batches):
                 batch_idxes = idxes[batch_idx * self.BATCH_SIZE:(batch_idx + 1) * self.BATCH_SIZE]
                 batch_event_train_in = train_event_in_seq[batch_idxes, :]
                 batch_event_train_out = train_event_out_seq[batch_idxes, :]
@@ -220,7 +221,7 @@ class RMTPP:
                 batch_time_train_out = train_time_out_seq[batch_idxes, :]
 
                 cur_state = np.zeros((self.BATCH_SIZE, self.HIDDEN_LAYER_SIZE))
-                total_loss = 0.0
+                batch_loss = 0.0
 
                 for bptt_idx in range(0, len(batch_event_train_in[0]) - self.BPTT, self.BPTT):
                     bptt_range = range(bptt_idx, (bptt_idx + self.BPTT))
@@ -247,13 +248,20 @@ class RMTPP:
                             self.sess.run([self.update,
                                            self.final_state, self.loss],
                                           feed_dict=feed_dict)
-                    total_loss += loss_
+                    batch_loss += loss_
 
+                total_loss += batch_loss
                 if batch_idx % 10 == 0:
-                    print('Loss on last batch = {}'.format(total_loss))
+                    print('Loss during batch {} last BPTT = {}, lr = {}'
+                          .format(batch_idx, batch_loss, self.sess.run(self.learning_rate)))
+
+            self.sess.run(self.increment_global_step)
+            print('Loss on last epoch = {}, new lr = {}, global_step = {}'
+                  .format(total_loss / n_batches,
+                          self.sess.run(self.learning_rate),
+                          self.sess.run(self.global_step)))
 
         self.last_epoch += self.num_epochs
-        self.sess.run(self.increment_global_step)
 
     def predict(self, test_data):
         pass
