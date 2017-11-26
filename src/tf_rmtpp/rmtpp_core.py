@@ -156,12 +156,19 @@ class RMTPP:
                 self.final_state = state
                 # optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.001)
 
-                self.new_learning_rate = tf.placeholder(name='new_learning_rate', shape=(1,))
-                self.learning_rate = tf.get_variable(name='learning_rate', shape=(1,), trainable=False,
-                                                     initializer=tf.constant_initializer(self.LEARNING_RATE))
-                self.update_lr = tf.assign(self.learning_rate, self.new_learning_rate, name='update_lr')
+                with tf.device('/cpu:0'):
+                    # Global step needs to be on the CPU (Why?)
+                    self.global_step = tf.Variable(0, name='global_step', trainable=False)
 
-                self.optimizer = tf.train.AdamOptimizer(learning_rate=self.LEARNING_RATE,
+                self.learning_rate = tf.train.inverse_time_decay(self.LEARNING_RATE, global_step=self.global_step,
+                                                                 decay_steps=1, decay_rate=1.0)
+                self.increment_global_step = tf.assign(
+                    self.global_step,
+                    self.global_step + 1,
+                    name='update_global_step'
+                )
+
+                self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
                                                         beta1=self.MOMENTUM)
                 # update = optimizer.minimize(loss)
 
@@ -174,10 +181,21 @@ class RMTPP:
                 self.norm_grads, self.global_norm = tf.clip_by_global_norm(grads, 100.0)
                 capped_gvs = list(zip(self.norm_grads, vars_))
 
-                self.update = self.optimizer.apply_gradients(capped_gvs)
+                self.update = self.optimizer.apply_gradients(capped_gvs,
+                                                             global_step=self.global_step)
 
-                self.init = tf.global_variables_initializer()
+                self.tf_init = tf.global_variables_initializer()
                 self.check_nan = tf.add_check_numerics_ops()
+
+    def initialize(self, finalize=False):
+        """Initialize the global trainable variables."""
+        self.sess.run(self.tf_init)
+
+        if finalize:
+            # This prevents memory leaks by disallowing changes to the graph
+            # after initialization.
+            self.sess.graph.finalize()
+
 
     def train(self, trainingData, check_nans=False):
         rs = np.random.RandomState(seed=self.seed)
@@ -189,14 +207,8 @@ class RMTPP:
 
         idxes = list(range(len(train_event_in_seq)))
 
-        self.sess.run(self.init)
-
         for epoch in range(self.last_epoch, self.last_epoch + self.num_epochs):
             rs.shuffle(idxes)
-
-            self.sess.run(self.update_lr, {
-                self.new_learning_rate: self.LEARNING_RATE / (epoch + 1)
-            })
 
             print("Starting epoch...", epoch)
 
@@ -241,6 +253,7 @@ class RMTPP:
                     print('Loss on last batch = {}'.format(total_loss))
 
         self.last_epoch += self.num_epochs
+        self.sess.run(self.increment_global_step)
 
     def predict(self, test_data):
         pass
