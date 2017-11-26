@@ -1,5 +1,8 @@
-from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.contrib.keras import preprocessing
 import itertools
+
+
+pad_sequences = preprocessing.sequence.pad_sequences
 
 
 def read_data(event_train_file, event_test_file, time_train_file, time_test_file):
@@ -63,4 +66,6 @@ def read_data(event_train_file, event_test_file, time_train_file, time_test_file
 
         'test_time_in_seq': test_time_in_seq,
         'test_time_out_seq': test_time_out_seq,
+
+        'num_categories': len(unique_samples)
     }
