@@ -12,7 +12,6 @@ def_opts = Deco.Options(
     float_type=tf.float32,
     seed=42,
     scope="RMTPP",
-    num_epochs=5,
 
     bptt=10
 )
@@ -24,7 +23,7 @@ class RMTPP:
     @Deco.optioned()
     def __init__(self, sess, num_categories, hidden_layer_size, batch_size,
                  learning_rate, momentum, l2_penalty, embed_size,
-                 float_type, bptt, seed, scope, num_epochs):
+                 float_type, bptt, seed, scope):
         self.HIDDEN_LAYER_SIZE = hidden_layer_size
         self.BATCH_SIZE = batch_size
         self.LEARNING_RATE = learning_rate
@@ -38,7 +37,6 @@ class RMTPP:
 
         self.sess = sess
         self.seed = seed
-        self.num_epochs = num_epochs
         self.last_epoch = 0
 
         with tf.variable_scope(scope):
@@ -206,19 +204,19 @@ class RMTPP:
             # after initialization.
             self.sess.graph.finalize()
 
-    def train(self, trainingData, check_nans=False):
+    def train(self, training_data, num_epochs, check_nans=False):
         """Train the model given the training data."""
         rs = np.random.RandomState(seed=self.seed)
 
-        train_event_in_seq = trainingData['train_event_in_seq']
-        train_time_in_seq = trainingData['train_time_in_seq']
-        train_event_out_seq = trainingData['train_event_out_seq']
-        train_time_out_seq = trainingData['train_event_out_seq']
+        train_event_in_seq = training_data['train_event_in_seq']
+        train_time_in_seq = training_data['train_time_in_seq']
+        train_event_out_seq = training_data['train_event_out_seq']
+        train_time_out_seq = training_data['train_event_out_seq']
 
         idxes = list(range(len(train_event_in_seq)))
         n_batches = len(idxes) // self.BATCH_SIZE
 
-        for epoch in range(self.last_epoch, self.last_epoch + self.num_epochs):
+        for epoch in range(self.last_epoch, self.last_epoch + num_epochs):
             rs.shuffle(idxes)
 
             print("Starting epoch...", epoch)
