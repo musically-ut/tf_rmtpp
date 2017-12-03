@@ -88,21 +88,32 @@ class RMTPP:
 
                 self.loss = 0.0
                 batch_ones = tf.ones((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
+
+                self.hidden_states = []
                 for i in range(self.BPTT):
                     events_embedded = tf.nn.embedding_lookup(self.Wem, self.events_in[:, i])
                     time = tf.expand_dims(self.times_in[:, i], axis=-1)
 
                     # output, state = RNNcell(events_embedded, state)
-                    # TODO Does TF automatically broadcast? Then we'll not need multiplication
-                    # with tf.ones
 
-                    self.state = tf.clip_by_value(
-                        tf.matmul(state, self.Wh) +
-                        tf.matmul(events_embedded, self.Wy) +
-                        tf.matmul(time, self.Wt) +
-                        tf.matmul(batch_ones, self.bh),
-                        0.0, 1e6,
-                        name='h_t')
+                    # In the batch some of the sequences may have ended before we get to the
+                    # end of the seq. In such cases, the events will be zero.
+                    # TODO Figure out how to do this with RNNCell, LSTM, etc.
+                    num_events = tf.reduce_sum(tf.where(self.events_in[:, i] > 0,
+                                               tf.ones(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE),
+                                               tf.zeros(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE)),
+                                               name='num_events')
+
+                    # TODO Does TF automatically broadcast? Then we'll not need multiplication with tf.ones
+                    state = tf.cond(num_events > 0,
+                                    lambda: tf.clip_by_value(
+                                        tf.matmul(state, self.Wh) +
+                                        tf.matmul(events_embedded, self.Wy) +
+                                        tf.matmul(time, self.Wt) +
+                                        tf.matmul(batch_ones, self.bh),
+                                        0.0, 1e6, name='h_t'),
+                                    lambda: state
+                                    )
 
                     base_intensity = tf.matmul(batch_ones, self.bt)
                     delta_t = tf.expand_dims(self.times_out[:, i] - self.times_in[:, i], axis=-1)
@@ -140,13 +151,6 @@ class RMTPP:
                     )
                     step_loss = time_loss + mark_loss
 
-                    # In the batch some of the sequences may have ended before we get to the
-                    # end of the seq. In such cases, the events will be zero.
-                    # TODO Figure out how to do this with RNNCell, LSTM, etc.
-                    num_events = tf.reduce_sum(tf.where(self.events_in[:, i] > 0,
-                                               tf.ones(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE),
-                                               tf.zeros(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE)),
-                                               name='num_events')
                     self.loss -= tf.cond(num_events > 0,
                                          lambda: tf.reduce_sum(
                                              tf.where(self.events_in[:, i] > 0,
@@ -155,7 +159,9 @@ class RMTPP:
                                              name='batch_bptt_loss'),
                                          lambda: 0.0)
 
-                self.final_state = state
+                    self.hidden_states.append(state)
+
+                self.final_state = self.hidden_states[-1]
 
                 with tf.device('/cpu:0'):
                     # Global step needs to be on the CPU (Why?)
