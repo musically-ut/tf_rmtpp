@@ -184,7 +184,7 @@ class RMTPP:
                                                              global_step=self.global_step)
 
                 self.tf_init = tf.global_variables_initializer()
-                self.check_nan = tf.add_check_numerics_ops()
+                # self.check_nan = tf.add_check_numerics_ops()
 
     def initialize(self, finalize=False):
         """Initialize the global trainable variables."""
@@ -239,10 +239,13 @@ class RMTPP:
                     }
 
                     if check_nans:
-                        _, _, cur_state, loss_ = \
-                            self.sess.run([self.check_nan, self.update,
-                                           self.final_state, self.loss],
-                                          feed_dict=feed_dict)
+                        raise NotImplemented('tf.add_check_numerics_ops is '
+                                             'incompatible with tf.cond and '
+                                             'tf.while_loop.')
+                        # _, _, cur_state, loss_ = \
+                        #     self.sess.run([self.check_nan, self.update,
+                        #                    self.final_state, self.loss],
+                        #                   feed_dict=feed_dict)
                     else:
                         _, cur_state, loss_ = \
                             self.sess.run([self.update,
@@ -255,7 +258,7 @@ class RMTPP:
                     print('Loss during batch {} last BPTT = {}, lr = {}'
                           .format(batch_idx, batch_loss, self.sess.run(self.learning_rate)))
 
-            self.sess.run(self.increment_global_step)
+            # self.sess.run(self.increment_global_step)
             print('Loss on last epoch = {}, new lr = {}, global_step = {}'
                   .format(total_loss / n_batches,
                           self.sess.run(self.learning_rate),
