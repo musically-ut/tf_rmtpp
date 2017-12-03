@@ -90,6 +90,8 @@ class RMTPP:
                 batch_ones = tf.ones((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
 
                 self.hidden_states = []
+                self.event_preds = []
+
                 for i in range(self.BPTT):
                     events_embedded = tf.nn.embedding_lookup(self.Wem, self.events_in[:, i])
                     time = tf.expand_dims(self.times_in[:, i], axis=-1)
@@ -160,6 +162,7 @@ class RMTPP:
                                          lambda: 0.0)
 
                     self.hidden_states.append(state)
+                    self.event_preds.append(events_pred)
 
                 self.final_state = self.hidden_states[-1]
 
@@ -210,7 +213,7 @@ class RMTPP:
             # after initialization.
             self.sess.graph.finalize()
 
-    def train(self, training_data, num_epochs, check_nans=False):
+    def train(self, training_data, num_epochs=1, check_nans=False):
         """Train the model given the training data."""
         rs = np.random.RandomState(seed=self.seed)
 
@@ -229,6 +232,7 @@ class RMTPP:
             total_loss = 0.0
 
             for batch_idx in range(n_batches):
+                # TODO: This is horribly inefficient. Move this to a separate thread using FIFOQueues.
                 batch_idxes = idxes[batch_idx * self.BATCH_SIZE:(batch_idx + 1) * self.BATCH_SIZE]
                 batch_event_train_in = train_event_in_seq[batch_idxes, :]
                 batch_event_train_out = train_event_out_seq[batch_idxes, :]
@@ -279,7 +283,39 @@ class RMTPP:
                           self.sess.run(self.learning_rate),
                           self.sess.run(self.global_step)))
 
-        self.last_epoch += self.num_epochs
+        # TODO: Implement saving/restoring of graph
+        self.last_epoch += num_epochs
 
     def predict(self, test_data):
-        pass
+        """Treat the entire test-data as a single batch."""
+
+        test_event_in_seq = test_data['test_event_in_seq']
+        test_time_in_seq = test_data['test_time_in_seq']
+        # test_time_out_seq = test_data['test_time_out_seq']
+        # test_event_out_seq = test_data['test_event_out_seq']
+
+        all_hidden_states = []
+        all_event_preds = []
+
+        cur_state = np.zeros((len(test_event_in_seq), self.HIDDEN_LAYER_SIZE))
+
+        for bptt_idx in range(0, len(test_event_in_seq[0]) - self.BPTT, self.BPTT):
+            bptt_range = range(bptt_idx, (bptt_idx + self.BPTT))
+            bptt_event_in = test_event_in_seq[:, bptt_range]
+            bptt_time_in = test_time_in_seq[:, bptt_range]
+
+            feed_dict = {
+                self.initial_state: cur_state,
+                self.events_in: bptt_event_in,
+                self.times_in: bptt_time_in
+            }
+
+            bptt_hidden_states, bptt_events_pred, cur_state = self.sess.run(
+                [self.hidden_states, self.event_preds, self.final_state],
+                feed_dict=feed_dict
+            )
+
+            all_hidden_states.extend(bptt_hidden_states)
+            all_event_preds.extend(bptt_events_pred)
+
+        return all_hidden_states, all_event_preds
