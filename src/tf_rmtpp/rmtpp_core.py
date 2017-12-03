@@ -44,11 +44,13 @@ class RMTPP:
         with tf.variable_scope(scope):
             with tf.device('/gpu:0'):
                 # Make input variables
-                self.events_in = tf.placeholder(tf.int32, [self.BATCH_SIZE, self.BPTT])
-                self.times_in = tf.placeholder(self.FLOAT_TYPE, [self.BATCH_SIZE, self.BPTT])
+                self.events_in = tf.placeholder(tf.int32, [None, self.BPTT])
+                self.times_in = tf.placeholder(self.FLOAT_TYPE, [None, self.BPTT])
 
-                self.events_out = tf.placeholder(tf.int32, [self.BATCH_SIZE, self.BPTT])
-                self.times_out = tf.placeholder(self.FLOAT_TYPE, [self.BATCH_SIZE, self.BPTT])
+                self.events_out = tf.placeholder(tf.int32, [None, self.BPTT])
+                self.times_out = tf.placeholder(self.FLOAT_TYPE, [None, self.BPTT])
+
+                self.inf_batch_size = tf.shape(self.events_in)[0]
 
                 # Make variables
                 with tf.variable_scope('hidden_state'):
@@ -84,10 +86,10 @@ class RMTPP:
                 # RNNcell = RNN_CELL_TYPE(HIDDEN_LAYER_SIZE)
 
                 # Initial state for GRU cells
-                self.initial_state = state = tf.zeros([self.BATCH_SIZE, self.HIDDEN_LAYER_SIZE], dtype=self.FLOAT_TYPE, name='hidden_state')
+                self.initial_state = state = tf.zeros([self.inf_batch_size, self.HIDDEN_LAYER_SIZE], dtype=self.FLOAT_TYPE, name='hidden_state')
 
                 self.loss = 0.0
-                batch_ones = tf.ones((self.BATCH_SIZE, 1), dtype=self.FLOAT_TYPE)
+                batch_ones = tf.ones((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
                 for i in range(self.BPTT):
                     events_embedded = tf.nn.embedding_lookup(self.Wem, self.events_in[:, i])
                     time = tf.expand_dims(self.times_in[:, i], axis=-1)
@@ -130,7 +132,7 @@ class RMTPP:
                                 tf.gather_nd(
                                     events_pred,
                                     tf.concat([
-                                        tf.expand_dims(tf.range(self.BATCH_SIZE), -1),
+                                        tf.expand_dims(tf.range(self.inf_batch_size), -1),
                                         tf.expand_dims(self.events_out[:, i], -1)
                                     ], axis=1, name='Pr_next_event'
                                     )
@@ -144,13 +146,15 @@ class RMTPP:
                     # end of the seq. In such cases, the events will be zero.
                     # TODO Figure out how to do this with RNNCell, LSTM, etc.
                     num_events = tf.reduce_sum(tf.where(self.events_in[:, i] > 0,
-                                               tf.ones(self.BATCH_SIZE, dtype=self.FLOAT_TYPE),
-                                               tf.zeros(self.BATCH_SIZE, dtype=self.FLOAT_TYPE)),
+                                               tf.ones(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE),
+                                               tf.zeros(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE)),
                                                name='num_events')
                     self.loss -= tf.cond(num_events > 0,
-                                         lambda: tf.reduce_sum(tf.where(self.events_in[:, i] > 0,
-                                                               tf.squeeze(step_loss) / num_events,
-                                                               tf.zeros(self.BATCH_SIZE)), name='batch_bptt_loss'),
+                                         lambda: tf.reduce_sum(
+                                             tf.where(self.events_in[:, i] > 0,
+                                                      tf.squeeze(step_loss) / num_events,
+                                                      tf.zeros(shape=(self.inf_batch_size,))),
+                                             name='batch_bptt_loss'),
                                          lambda: 0.0)
 
                 self.final_state = state
@@ -161,14 +165,21 @@ class RMTPP:
 
                 self.learning_rate = tf.train.inverse_time_decay(self.LEARNING_RATE, global_step=self.global_step,
                                                                  decay_steps=10.0, decay_rate=.001)
-                self.increment_global_step = tf.assign(
-                    self.global_step,
-                    self.global_step + 1,
-                    name='update_global_step'
-                )
+                # self.global_step is incremented automatically by the
+                # optimizer.
+
+                # self.increment_global_step = tf.assign(
+                #     self.global_step,
+                #     self.global_step + 1,
+                #     name='update_global_step'
+                # )
+
+                # self.optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
 
                 self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
-                                                        beta1=self.MOMENTUM)
+                                                          beta1=self.MOMENTUM)
+
+                # Capping the gradient before minimizing.
                 # update = optimizer.minimize(loss)
 
                 # Performing manual gradient clipping.
