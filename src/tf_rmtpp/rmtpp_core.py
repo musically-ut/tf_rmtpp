@@ -99,6 +99,7 @@ class RMTPP:
 
                 self.loss = 0.0
                 batch_ones = tf.ones((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
+                last_time = tf.zeros((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
 
                 self.hidden_states = []
                 self.event_preds = []
@@ -117,19 +118,21 @@ class RMTPP:
                                                tf.zeros(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE)),
                                                name='num_events')
 
+                    # delta_t = tf.expand_dims(self.times_out[:, i] - self.times_in[:, i], axis=-1)
+                    delta_t = time - last_time
+
                     # TODO Does TF automatically broadcast? Then we'll not need multiplication with tf.ones
                     state = tf.cond(num_events > 0,
                                     lambda: tf.clip_by_value(
                                         tf.matmul(state, self.Wh) +
                                         tf.matmul(events_embedded, self.Wy) +
-                                        tf.matmul(time, self.Wt) +
+                                        tf.matmul(delta_t, self.Wt) +
                                         tf.matmul(batch_ones, self.bh),
                                         0.0, 1e6, name='h_t'),
                                     lambda: state
                                     )
 
                     base_intensity = tf.matmul(batch_ones, self.bt)
-                    delta_t = tf.expand_dims(self.times_out[:, i] - self.times_in[:, i], axis=-1)
                     log_lambda_ = (tf.matmul(state, self.Vt) +
                                    delta_t * self.wt +
                                    base_intensity)
@@ -172,6 +175,7 @@ class RMTPP:
                                              name='batch_bptt_loss'),
                                          lambda: 0.0)
 
+                    last_time = time
                     self.hidden_states.append(state)
                     self.event_preds.append(events_pred)
 
