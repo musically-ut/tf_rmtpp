@@ -1,6 +1,9 @@
 import tensorflow as tf
 import numpy as np
+import os
 import decorated_options as Deco
+from .utils import create_dir
+
 
 def_opts = Deco.Options(
     hidden_layer_size=64,   # 64, 128, 256, 512, 1024
@@ -11,7 +14,10 @@ def_opts = Deco.Options(
     embed_size=64,
     float_type=tf.float32,
     seed=42,
-    scope="RMTPP",
+    scope='RMTPP',
+    save_dir='./save.rmtpp/',
+    device_gpu='/gpu:0',
+    device_cpu='/cpu:0',
 
     bptt=10
 )
@@ -23,7 +29,8 @@ class RMTPP:
     @Deco.optioned()
     def __init__(self, sess, num_categories, hidden_layer_size, batch_size,
                  learning_rate, momentum, l2_penalty, embed_size,
-                 float_type, bptt, seed, scope):
+                 float_type, bptt, seed, scope, save_dir,
+                 device_gpu, device_cpu):
         self.HIDDEN_LAYER_SIZE = hidden_layer_size
         self.BATCH_SIZE = batch_size
         self.LEARNING_RATE = learning_rate
@@ -31,16 +38,20 @@ class RMTPP:
         self.L2_PENALTY = l2_penalty
         self.EMBED_SIZE = embed_size
         self.BPTT = bptt
+        self.SAVE_DIR = save_dir
 
         self.NUM_CATEGORIES = num_categories
         self.FLOAT_TYPE = float_type
+
+        self.DEVICE_CPU = device_cpu
+        self.DEVICE_GPU = device_gpu
 
         self.sess = sess
         self.seed = seed
         self.last_epoch = 0
 
         with tf.variable_scope(scope):
-            with tf.device('/gpu:0'):
+            with tf.device(device_gpu):
                 # Make input variables
                 self.events_in = tf.placeholder(tf.int32, [None, self.BPTT])
                 self.times_in = tf.placeholder(self.FLOAT_TYPE, [None, self.BPTT])
@@ -166,12 +177,14 @@ class RMTPP:
 
                 self.final_state = self.hidden_states[-1]
 
-                with tf.device('/cpu:0'):
+                with tf.device(device_cpu):
                     # Global step needs to be on the CPU (Why?)
                     self.global_step = tf.Variable(0, name='global_step', trainable=False)
 
-                self.learning_rate = tf.train.inverse_time_decay(self.LEARNING_RATE, global_step=self.global_step,
-                                                                 decay_steps=10.0, decay_rate=.001)
+                self.learning_rate = tf.train.inverse_time_decay(self.LEARNING_RATE,
+                                                                 global_step=self.global_step,
+                                                                 decay_steps=10.0,
+                                                                 decay_rate=.001)
                 # self.global_step is incremented automatically by the
                 # optimizer.
 
@@ -213,9 +226,22 @@ class RMTPP:
             # after initialization.
             self.sess.graph.finalize()
 
-    def train(self, training_data, num_epochs=1, check_nans=False):
+    def train(self, training_data, num_epochs=1,
+              restart=False, check_nans=False):
         """Train the model given the training data."""
+        create_dir(self.SAVE_DIR)
+        ckpt = tf.train.get_checkpoint_state(self.SAVE_DIR)
+
+        # TODO: Should give the variable list explicitly for RMTPP only, in case
+        # There are variables outside RMTPP model.
+        # TODO: Why does this create new nodes in the graph? Possibly memory leak?
+        saver = tf.train.Saver(tf.global_variables())
+
         rs = np.random.RandomState(seed=self.seed)
+
+        if ckpt and restart:
+            print('Restoring from {]'.format(ckpt.model_checkpoint_path))
+            saver.restore(self.sess, ckpt.model_checkpoint_path)
 
         train_event_in_seq = training_data['train_event_in_seq']
         train_time_in_seq = training_data['train_time_in_seq']
@@ -283,8 +309,19 @@ class RMTPP:
                           self.sess.run(self.learning_rate),
                           self.sess.run(self.global_step)))
 
-        # TODO: Implement saving/restoring of graph
+        checkpoint_path = os.path.join(self.SAVE_DIR, 'model.ckpt')
+        saver.save(self.sess, checkpoint_path, global_step=self.global_step)
+        print('Model saved at {}'.format(checkpoint_path))
+
+        # Remember how many epochs we have trained.
         self.last_epoch += num_epochs
+
+    def restore(self):
+        """Restore the model from saved state."""
+        saver = tf.train.Saver(tf.global_variables())
+        ckpt = tf.train.get_checkpoint_state(self.SAVE_DIR)
+        print('Loading the model from {}'.format(ckpt.model_checkpoint_path))
+        saver.restore(self.sess, ckpt.model_checkpoint_path)
 
     def predict(self, test_data):
         """Treat the entire test-data as a single batch."""

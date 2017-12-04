@@ -1,8 +1,15 @@
 from tensorflow.contrib.keras import preprocessing
 import itertools
+import os
 
 
 pad_sequences = preprocessing.sequence.pad_sequences
+
+
+def create_dir(dirname):
+    """Creates a directory if it does not already exist."""
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
 
 
 def read_data(event_train_file, event_test_file, time_train_file, time_test_file):
