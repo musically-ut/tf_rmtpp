@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 import os
 import decorated_options as Deco
-from .utils import create_dir
+from .utils import create_dir, variable_summaries
 
 
 def_opts = Deco.Options(
@@ -16,6 +16,8 @@ def_opts = Deco.Options(
     seed=42,
     scope='RMTPP',
     save_dir='./save.rmtpp/',
+    summary_dir='./summary.rmtpp/',
+
     device_gpu='/gpu:0',
     device_cpu='/cpu:0',
 
@@ -30,7 +32,7 @@ class RMTPP:
     def __init__(self, sess, num_categories, hidden_layer_size, batch_size,
                  learning_rate, momentum, l2_penalty, embed_size,
                  float_type, bptt, seed, scope, save_dir,
-                 device_gpu, device_cpu):
+                 device_gpu, device_cpu, summary_dir):
         self.HIDDEN_LAYER_SIZE = hidden_layer_size
         self.BATCH_SIZE = batch_size
         self.LEARNING_RATE = learning_rate
@@ -39,6 +41,7 @@ class RMTPP:
         self.EMBED_SIZE = embed_size
         self.BPTT = bptt
         self.SAVE_DIR = save_dir
+        self.SUMMARY_DIR = summary_dir
 
         self.NUM_CATEGORIES = num_categories
         self.FLOAT_TYPE = float_type
@@ -53,43 +56,60 @@ class RMTPP:
         with tf.variable_scope(scope):
             with tf.device(device_gpu):
                 # Make input variables
-                self.events_in = tf.placeholder(tf.int32, [None, self.BPTT])
-                self.times_in = tf.placeholder(self.FLOAT_TYPE, [None, self.BPTT])
+                self.events_in = tf.placeholder(tf.int32, [None, self.BPTT], name='events_in')
+                self.times_in = tf.placeholder(self.FLOAT_TYPE, [None, self.BPTT], name='times_in')
 
-                self.events_out = tf.placeholder(tf.int32, [None, self.BPTT])
-                self.times_out = tf.placeholder(self.FLOAT_TYPE, [None, self.BPTT])
+                self.events_out = tf.placeholder(tf.int32, [None, self.BPTT], name='events_out')
+                self.times_out = tf.placeholder(self.FLOAT_TYPE, [None, self.BPTT], name='times_out')
 
                 self.inf_batch_size = tf.shape(self.events_in)[0]
 
                 # Make variables
                 with tf.variable_scope('hidden_state'):
-                    self.Wt = tf.get_variable(name='Wt', shape=(1, self.HIDDEN_LAYER_SIZE),
-                                              dtype=self.FLOAT_TYPE)
+                    self.Wt = tf.get_variable(name='Wt',
+                                              shape=(1, self.HIDDEN_LAYER_SIZE),
+                                              dtype=self.FLOAT_TYPE,
+                                              initializer=tf.constant_initializer(0.0))
                     # The first row of Wem is merely a placeholder (will not be trained).
                     self.Wem = tf.get_variable(name='Wem', shape=(self.NUM_CATEGORIES + 1, self.EMBED_SIZE),
-                                               dtype=self.FLOAT_TYPE)
+                                               dtype=self.FLOAT_TYPE,
+                                               initializer=tf.constant_initializer(0.0))
                     self.Wh = tf.get_variable(name='Wh', shape=(self.HIDDEN_LAYER_SIZE, self.HIDDEN_LAYER_SIZE),
-                                              dtype=self.FLOAT_TYPE)
+                                              dtype=self.FLOAT_TYPE,
+                                              initializer=tf.constant_initializer(0.0))
                     self.bh = tf.get_variable(name='bh', shape=(1, self.HIDDEN_LAYER_SIZE),
-                                              dtype=self.FLOAT_TYPE)
+                                              dtype=self.FLOAT_TYPE,
+                                              initializer=tf.constant_initializer(0.0))
 
                 with tf.variable_scope('output'):
                     self.wt = tf.get_variable(name='wt', shape=(1, 1),
-                                              dtype=self.FLOAT_TYPE)
+                                              dtype=self.FLOAT_TYPE,
+                                              initializer=tf.constant_initializer(1.0))
 
                     self.Wy = tf.get_variable(name='Wy', shape=(self.EMBED_SIZE, self.HIDDEN_LAYER_SIZE),
-                                              dtype=self.FLOAT_TYPE)
+                                              dtype=self.FLOAT_TYPE,
+                                              initializer=tf.constant_initializer(0.0))
 
                     # The first column of Vy is merely a placeholder (will not be trained).
                     self.Vy = tf.get_variable(name='Vy', shape=(self.HIDDEN_LAYER_SIZE, self.NUM_CATEGORIES + 1),
-                                              dtype=self.FLOAT_TYPE)
+                                              dtype=self.FLOAT_TYPE,
+                                              initializer=tf.constant_initializer(0.0))
                     self.Vt = tf.get_variable(name='Vt', shape=(self.HIDDEN_LAYER_SIZE, 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.uniform_unit_scaling_initializer())
+                                              initializer=tf.constant_initializer(0.0))
                     self.bt = tf.get_variable(name='bt', shape=(1, 1),
-                                              dtype=self.FLOAT_TYPE)
+                                              dtype=self.FLOAT_TYPE,
+                                              initializer=tf.constant_initializer(0.0))
                     self.bk = tf.get_variable(name='bk', shape=(1, self.NUM_CATEGORIES + 1),
-                                              dtype=self.FLOAT_TYPE)
+                                              dtype=self.FLOAT_TYPE,
+                                              initializer=tf.constant_initializer(0.0))
+
+                self.all_vars = [self.Wt, self.Wem, self.Wh, self.bh,
+                                 self.wt, self.Wy, self.Vy, self.Vt, self.bt, self.bk]
+
+                # Add summaries for all (trainable) variables
+                for v in self.all_vars:
+                    variable_summaries(v)
 
                 # Make graph
                 # RNNcell = RNN_CELL_TYPE(HIDDEN_LAYER_SIZE)
@@ -104,80 +124,89 @@ class RMTPP:
                 self.hidden_states = []
                 self.event_preds = []
 
-                for i in range(self.BPTT):
-                    events_embedded = tf.nn.embedding_lookup(self.Wem, self.events_in[:, i])
-                    time = tf.expand_dims(self.times_in[:, i], axis=-1)
+                self.time_losses = []
+                self.mark_losses = []
 
-                    # output, state = RNNcell(events_embedded, state)
+                with tf.name_scope('BPTT'):
+                    for i in range(self.BPTT):
+                        events_embedded = tf.nn.embedding_lookup(self.Wem, self.events_in[:, i])
+                        time = tf.expand_dims(self.times_in[:, i], axis=-1)
 
-                    # In the batch some of the sequences may have ended before we get to the
-                    # end of the seq. In such cases, the events will be zero.
-                    # TODO Figure out how to do this with RNNCell, LSTM, etc.
-                    num_events = tf.reduce_sum(tf.where(self.events_in[:, i] > 0,
-                                               tf.ones(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE),
-                                               tf.zeros(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE)),
-                                               name='num_events')
+                        # output, state = RNNcell(events_embedded, state)
 
-                    # delta_t = tf.expand_dims(self.times_out[:, i] - self.times_in[:, i], axis=-1)
-                    delta_t = time - last_time
+                        # delta_t = tf.expand_dims(self.times_out[:, i] - self.times_in[:, i], axis=-1)
+                        delta_t = time - last_time
 
-                    # TODO Does TF automatically broadcast? Then we'll not need multiplication with tf.ones
-                    state = tf.cond(num_events > 0,
-                                    lambda: tf.clip_by_value(
-                                        tf.matmul(state, self.Wh) +
-                                        tf.matmul(events_embedded, self.Wy) +
-                                        tf.matmul(delta_t, self.Wt) +
-                                        tf.matmul(batch_ones, self.bh),
-                                        0.0, 1e6, name='h_t'),
-                                    lambda: state
-                                    )
+                        # TODO Does TF automatically broadcast? Then we'll not need multiplication with tf.ones
+                        with tf.name_scope('state_recursion'):
+                            state = tf.where(self.events_in[:, i] > 0,
+                                             tf.clip_by_value(
+                                                 tf.matmul(state, self.Wh) +
+                                                 tf.matmul(events_embedded, self.Wy) +
+                                                 tf.matmul(delta_t, self.Wt) +
+                                                 tf.matmul(batch_ones, self.bh),
+                                                 0.0, 1e6, name='h_t'),
+                                             state)
 
-                    base_intensity = tf.matmul(batch_ones, self.bt)
-                    log_lambda_ = (tf.matmul(state, self.Vt) +
-                                   delta_t * self.wt +
-                                   base_intensity)
+                        with tf.name_scope('loss_calc'):
+                            base_intensity = tf.matmul(batch_ones, self.bt)
+                            log_lambda_ = (tf.matmul(state, self.Vt) +
+                                           delta_t * self.wt +
+                                           base_intensity)
 
-                    lambda_ = tf.exp(tf.minimum(50.0, log_lambda_), name='lambda_')
-                    wt_non_zero = tf.sign(self.wt) * tf.maximum(1e-6, tf.abs(self.wt))
-                    log_f_star = (log_lambda_ +
-                                  (1.0 / wt_non_zero) * tf.exp(tf.minimum(50.0, tf.matmul(state, self.Vt) + base_intensity)) -
-                                  (1.0 / wt_non_zero) * lambda_)
+                            lambda_ = tf.exp(tf.minimum(50.0, log_lambda_), name='lambda_')
+                            wt_non_zero = tf.sign(self.wt) * tf.maximum(1e-6, tf.abs(self.wt))
+                            log_f_star = (log_lambda_ +
+                                          (1.0 / wt_non_zero) * tf.exp(tf.minimum(50.0, tf.matmul(state, self.Vt) + base_intensity)) -
+                                          (1.0 / wt_non_zero) * lambda_)
 
-                    events_pred = tf.nn.softmax(
-                        tf.minimum(50.0,
-                                   tf.matmul(state, self.Vy) + batch_ones * self.bk),
-                        name='Pr_events'
-                    )
-
-                    time_loss = log_f_star
-                    mark_loss = tf.expand_dims(
-                        tf.log(
-                            tf.maximum(
-                                1e-6,
-                                tf.gather_nd(
-                                    events_pred,
-                                    tf.concat([
-                                        tf.expand_dims(tf.range(self.inf_batch_size), -1),
-                                        tf.expand_dims(self.events_out[:, i], -1)
-                                    ], axis=1, name='Pr_next_event'
-                                    )
-                                )
+                            events_pred = tf.nn.softmax(
+                                tf.minimum(50.0,
+                                           tf.matmul(state, self.Vy) + batch_ones * self.bk),
+                                name='Pr_events'
                             )
-                        ), axis=-1, name='log_Pr_next_event'
-                    )
-                    step_loss = time_loss + mark_loss
 
-                    self.loss -= tf.cond(num_events > 0,
-                                         lambda: tf.reduce_sum(
-                                             tf.where(self.events_in[:, i] > 0,
-                                                      tf.squeeze(step_loss) / num_events,
-                                                      tf.zeros(shape=(self.inf_batch_size,))),
-                                             name='batch_bptt_loss'),
-                                         lambda: 0.0)
+                            time_loss = log_f_star
+                            mark_loss = tf.expand_dims(
+                                tf.log(
+                                    tf.maximum(
+                                        1e-6,
+                                        tf.gather_nd(
+                                            events_pred,
+                                            tf.concat([
+                                                tf.expand_dims(tf.range(self.inf_batch_size), -1),
+                                                tf.expand_dims(self.events_out[:, i], -1)
+                                            ], axis=1, name='Pr_next_event'
+                                            )
+                                        )
+                                    )
+                                ), axis=-1, name='log_Pr_next_event'
+                            )
+                            step_loss = time_loss + mark_loss
 
-                    last_time = time
-                    self.hidden_states.append(state)
-                    self.event_preds.append(events_pred)
+                            # In the batch some of the sequences may have ended before we get to the
+                            # end of the seq. In such cases, the events will be zero.
+                            # TODO Figure out how to do this with RNNCell, LSTM, etc.
+                            num_events = tf.reduce_sum(tf.where(self.events_in[:, i] > 0,
+                                                       tf.ones(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE),
+                                                       tf.zeros(shape=(self.inf_batch_size,), dtype=self.FLOAT_TYPE)),
+                                                       name='num_events')
+
+                            self.loss -= tf.cond(num_events > 0,
+                                                 lambda: tf.reduce_sum(
+                                                     tf.where(self.events_in[:, i] > 0,
+                                                              tf.squeeze(step_loss) / num_events,
+                                                              tf.zeros(shape=(self.inf_batch_size,))),
+                                                     name='batch_bptt_loss'),
+                                                 lambda: 0.0)
+
+                        last_time = time
+
+                        self.time_losses.append(time_loss)
+                        self.mark_losses.append(mark_loss)
+
+                        self.hidden_states.append(state)
+                        self.event_preds.append(events_pred)
 
                 self.final_state = self.hidden_states[-1]
 
@@ -212,6 +241,10 @@ class RMTPP:
 
                 # capped_gvs = [(tf.clip_by_norm(grad, 100.0), var) for grad, var in gvs]
                 grads, vars_ = list(zip(*self.gvs))
+
+                for g, v in zip(grads, vars_):
+                    variable_summaries(g, name='grad-' + v.name.split('/')[-1][:-2])
+
                 self.norm_grads, self.global_norm = tf.clip_by_global_norm(grads, 100.0)
                 capped_gvs = list(zip(self.norm_grads, vars_))
 
@@ -219,6 +252,7 @@ class RMTPP:
                                                              global_step=self.global_step)
 
                 self.tf_init = tf.global_variables_initializer()
+                self.tf_merged_summaries = tf.summary.merge_all()
                 # self.check_nan = tf.add_check_numerics_ops()
 
     def initialize(self, finalize=False):
@@ -231,7 +265,8 @@ class RMTPP:
             self.sess.graph.finalize()
 
     def train(self, training_data, num_epochs=1,
-              restart=False, check_nans=False):
+              restart=False, check_nans=False, one_batch=False,
+              with_summaries=False):
         """Train the model given the training data."""
         create_dir(self.SAVE_DIR)
         ckpt = tf.train.get_checkpoint_state(self.SAVE_DIR)
@@ -240,6 +275,9 @@ class RMTPP:
         # There are variables outside RMTPP model.
         # TODO: Why does this create new nodes in the graph? Possibly memory leak?
         saver = tf.train.Saver(tf.global_variables())
+
+        train_writer = tf.summary.FileWriter(self.SUMMARY_DIR + '/train',
+                                             self.sess.graph)
 
         rs = np.random.RandomState(seed=self.seed)
 
@@ -296,22 +334,37 @@ class RMTPP:
                         #                    self.final_state, self.loss],
                         #                   feed_dict=feed_dict)
                     else:
-                        _, cur_state, loss_ = \
-                            self.sess.run([self.update,
-                                           self.final_state, self.loss],
-                                          feed_dict=feed_dict)
+                        if with_summaries:
+                            _, summaries, cur_state, loss_, step = \
+                                self.sess.run([self.update,
+                                               self.tf_merged_summaries,
+                                               self.final_state,
+                                               self.loss,
+                                               self.global_step],
+                                              feed_dict=feed_dict)
+
+                            train_writer.add_summary(summaries, step)
+                        else:
+                            _, cur_state, loss_ = \
+                                self.sess.run([self.update,
+                                               self.final_state, self.loss],
+                                              feed_dict=feed_dict)
                     batch_loss += loss_
 
                 total_loss += batch_loss
                 if batch_idx % 10 == 0:
-                    print('Loss during batch {} last BPTT = {}, lr = {}'
+                    print('Loss during batch {} last BPTT = {:.3f}, lr = {:.5f}'
                           .format(batch_idx, batch_loss, self.sess.run(self.learning_rate)))
 
             # self.sess.run(self.increment_global_step)
-            print('Loss on last epoch = {}, new lr = {}, global_step = {}'
+            print('Loss on last epoch = {:.4f}, new lr = {:.5f}, global_step = {}'
                   .format(total_loss / n_batches,
                           self.sess.run(self.learning_rate),
                           self.sess.run(self.global_step)))
+
+            if one_batch:
+                print('Breaking after just one batch.')
+                break
 
         checkpoint_path = os.path.join(self.SAVE_DIR, 'model.ckpt')
         saver.save(self.sess, checkpoint_path, global_step=self.global_step)
