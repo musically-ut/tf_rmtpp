@@ -244,7 +244,7 @@ class RMTPP:
         rs = np.random.RandomState(seed=self.seed)
 
         if ckpt and restart:
-            print('Restoring from {]'.format(ckpt.model_checkpoint_path))
+            print('Restoring from {}'.format(ckpt.model_checkpoint_path))
             saver.restore(self.sess, ckpt.model_checkpoint_path)
 
         train_event_in_seq = training_data['train_event_in_seq']
