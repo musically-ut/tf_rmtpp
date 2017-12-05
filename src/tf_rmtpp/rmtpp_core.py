@@ -76,7 +76,7 @@ class RMTPP:
                                                initializer=tf.constant_initializer(0.0))
                     self.Wh = tf.get_variable(name='Wh', shape=(self.HIDDEN_LAYER_SIZE, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(0.0))
+                                              initializer=tf.constant_initializer(np.eye(self.HIDDEN_LAYER_SIZE)))
                     self.bh = tf.get_variable(name='bh', shape=(1, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
                                               initializer=tf.constant_initializer(0.0))
@@ -119,34 +119,31 @@ class RMTPP:
 
                 self.loss = 0.0
                 batch_ones = tf.ones((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
-                last_time = tf.zeros((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
 
                 self.hidden_states = []
+                self.new_hidden_states = []
                 self.event_preds = []
 
                 self.time_losses = []
                 self.mark_losses = []
+                self.delta_ts = []
 
                 with tf.name_scope('BPTT'):
                     for i in range(self.BPTT):
                         events_embedded = tf.nn.embedding_lookup(self.Wem, self.events_in[:, i])
-                        time = tf.expand_dims(self.times_in[:, i], axis=-1)
+                        delta_t = tf.expand_dims(self.times_in[:, i], axis=-1)
 
                         # output, state = RNNcell(events_embedded, state)
 
-                        # delta_t = tf.expand_dims(self.times_out[:, i] - self.times_in[:, i], axis=-1)
-                        delta_t = time - last_time
-
                         # TODO Does TF automatically broadcast? Then we'll not need multiplication with tf.ones
                         with tf.name_scope('state_recursion'):
-                            state = tf.where(self.events_in[:, i] > 0,
-                                             tf.clip_by_value(
+                            new_state = tf.clip_by_value(
                                                  tf.matmul(state, self.Wh) +
                                                  tf.matmul(events_embedded, self.Wy) +
                                                  tf.matmul(delta_t, self.Wt) +
                                                  tf.matmul(batch_ones, self.bh),
-                                                 0.0, 1e6, name='h_t'),
-                                             state)
+                                                 0.0, 1e6, name='h_t')
+                            state = tf.where(self.events_in[:, i] > 0, new_state, state)
 
                         with tf.name_scope('loss_calc'):
                             base_intensity = tf.matmul(batch_ones, self.bt)
@@ -200,13 +197,14 @@ class RMTPP:
                                                      name='batch_bptt_loss'),
                                                  lambda: 0.0)
 
-                        last_time = time
-
                         self.time_losses.append(time_loss)
                         self.mark_losses.append(mark_loss)
 
                         self.hidden_states.append(state)
+                        self.new_hidden_states.append(new_state)
                         self.event_preds.append(events_pred)
+
+                        self.delta_ts.append(delta_t)
 
                 self.final_state = self.hidden_states[-1]
 
@@ -244,6 +242,13 @@ class RMTPP:
 
                 for g, v in zip(grads, vars_):
                     variable_summaries(g, name='grad-' + v.name.split('/')[-1][:-2])
+
+                variable_summaries(self.hidden_states, name='agg-hidden-states')
+                variable_summaries(self.event_preds, name='agg-event-preds-softmax')
+                variable_summaries(self.time_losses, name='agg-time-losses')
+                variable_summaries(self.mark_losses, name='agg-mark-losses')
+                variable_summaries(self.mark_losses, name='agg-delta-ts')
+                variable_summaries(self.new_hidden_states, name='agg-new-hidden-states')
 
                 self.norm_grads, self.global_norm = tf.clip_by_global_norm(grads, 100.0)
                 capped_gvs = list(zip(self.norm_grads, vars_))
