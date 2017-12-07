@@ -53,6 +53,8 @@ class RMTPP:
         self.seed = seed
         self.last_epoch = 0
 
+        self.rs = np.random.RandomState(seed + 42)
+
         with tf.variable_scope(scope):
             with tf.device(device_gpu):
                 # Make input variables
@@ -64,16 +66,17 @@ class RMTPP:
 
                 self.inf_batch_size = tf.shape(self.events_in)[0]
 
+
                 # Make variables
                 with tf.variable_scope('hidden_state'):
                     self.Wt = tf.get_variable(name='Wt',
                                               shape=(1, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(0.0))
+                                              initializer=tf.constant_initializer(1e-3))
                     # The first row of Wem is merely a placeholder (will not be trained).
                     self.Wem = tf.get_variable(name='Wem', shape=(self.NUM_CATEGORIES + 1, self.EMBED_SIZE),
                                                dtype=self.FLOAT_TYPE,
-                                               initializer=tf.constant_initializer(0.0))
+                                               initializer=tf.constant_initializer(self.rs.randn(self.NUM_CATEGORIES + 1, self.EMBED_SIZE) * 0.01))
                     self.Wh = tf.get_variable(name='Wh', shape=(self.HIDDEN_LAYER_SIZE, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
                                               initializer=tf.constant_initializer(np.eye(self.HIDDEN_LAYER_SIZE)))
@@ -93,7 +96,7 @@ class RMTPP:
                     # The first column of Vy is merely a placeholder (will not be trained).
                     self.Vy = tf.get_variable(name='Vy', shape=(self.HIDDEN_LAYER_SIZE, self.NUM_CATEGORIES + 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(0.0))
+                                              initializer=tf.constant_initializer(0.001))
                     self.Vt = tf.get_variable(name='Vt', shape=(self.HIDDEN_LAYER_SIZE, 1),
                                               dtype=self.FLOAT_TYPE,
                                               initializer=tf.constant_initializer(0.0))
@@ -108,17 +111,25 @@ class RMTPP:
                                  self.wt, self.Wy, self.Vy, self.Vt, self.bt, self.bk]
 
                 # Add summaries for all (trainable) variables
-                for v in self.all_vars:
-                    variable_summaries(v)
+                with tf.device(device_cpu):
+                    for v in self.all_vars:
+                            variable_summaries(v)
 
                 # Make graph
                 # RNNcell = RNN_CELL_TYPE(HIDDEN_LAYER_SIZE)
 
                 # Initial state for GRU cells
-                self.initial_state = state = tf.zeros([self.inf_batch_size, self.HIDDEN_LAYER_SIZE], dtype=self.FLOAT_TYPE, name='hidden_state')
+                self.initial_state = state = tf.zeros([self.inf_batch_size, self.HIDDEN_LAYER_SIZE],
+                                                      dtype=self.FLOAT_TYPE,
+                                                      name='initial_state')
+                self.initial_time = last_time = tf.zeros((self.inf_batch_size,),
+                                                         dtype=self.FLOAT_TYPE,
+                                                         name='initial_time')
+
 
                 self.loss = 0.0
-                batch_ones = tf.ones((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
+                ones_2d = tf.ones((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
+                ones_1d = tf.ones((self.inf_batch_size,), dtype=self.FLOAT_TYPE)
 
                 self.hidden_states = []
                 self.new_hidden_states = []
@@ -127,11 +138,19 @@ class RMTPP:
                 self.time_losses = []
                 self.mark_losses = []
                 self.delta_ts = []
+                self.bptt_num_events = []
+                self.times = []
+                self.last_times = []
 
                 with tf.name_scope('BPTT'):
                     for i in range(self.BPTT):
                         events_embedded = tf.nn.embedding_lookup(self.Wem, self.events_in[:, i])
-                        delta_t = tf.expand_dims(self.times_in[:, i], axis=-1)
+                        time = self.times_in[:, i]
+
+                        delta_t = tf.expand_dims(time - last_time, axis=-1)
+
+                        self.last_times.append(last_time)
+                        last_time = time
 
                         # output, state = RNNcell(events_embedded, state)
 
@@ -141,12 +160,12 @@ class RMTPP:
                                                  tf.matmul(state, self.Wh) +
                                                  tf.matmul(events_embedded, self.Wy) +
                                                  tf.matmul(delta_t, self.Wt) +
-                                                 tf.matmul(batch_ones, self.bh),
+                                                 tf.matmul(ones_2d, self.bh),
                                                  0.0, 1e6, name='h_t')
                             state = tf.where(self.events_in[:, i] > 0, new_state, state)
 
                         with tf.name_scope('loss_calc'):
-                            base_intensity = tf.matmul(batch_ones, self.bt)
+                            base_intensity = tf.matmul(ones_2d, self.bt)
                             log_lambda_ = (tf.matmul(state, self.Vt) +
                                            delta_t * self.wt +
                                            base_intensity)
@@ -159,7 +178,7 @@ class RMTPP:
 
                             events_pred = tf.nn.softmax(
                                 tf.minimum(50.0,
-                                           tf.matmul(state, self.Vy) + batch_ones * self.bk),
+                                           tf.matmul(state, self.Vy) + ones_2d * self.bk),
                                 name='Pr_events'
                             )
 
@@ -199,12 +218,14 @@ class RMTPP:
 
                         self.time_losses.append(time_loss)
                         self.mark_losses.append(mark_loss)
+                        self.bptt_num_events.append(num_events)
 
                         self.hidden_states.append(state)
                         self.new_hidden_states.append(new_state)
                         self.event_preds.append(events_pred)
 
                         self.delta_ts.append(delta_t)
+                        self.times.append(time)
 
                 self.final_state = self.hidden_states[-1]
 
@@ -240,15 +261,20 @@ class RMTPP:
                 # capped_gvs = [(tf.clip_by_norm(grad, 100.0), var) for grad, var in gvs]
                 grads, vars_ = list(zip(*self.gvs))
 
-                for g, v in zip(grads, vars_):
-                    variable_summaries(g, name='grad-' + v.name.split('/')[-1][:-2])
+                with tf.device(device_cpu):
+                    for g, v in zip(grads, vars_):
+                        variable_summaries(g, name='grad-' + v.name.split('/')[-1][:-2])
 
-                variable_summaries(self.hidden_states, name='agg-hidden-states')
-                variable_summaries(self.event_preds, name='agg-event-preds-softmax')
-                variable_summaries(self.time_losses, name='agg-time-losses')
-                variable_summaries(self.mark_losses, name='agg-mark-losses')
-                variable_summaries(self.mark_losses, name='agg-delta-ts')
-                variable_summaries(self.new_hidden_states, name='agg-new-hidden-states')
+                    variable_summaries(self.hidden_states, name='agg-hidden-states')
+                    variable_summaries(self.event_preds, name='agg-event-preds-softmax')
+                    variable_summaries(self.time_losses, name='agg-time-losses')
+                    variable_summaries(self.mark_losses, name='agg-mark-losses')
+                    variable_summaries(self.mark_losses, name='agg-delta-ts')
+                    variable_summaries(self.new_hidden_states, name='agg-new-hidden-states')
+                    variable_summaries(self.bptt_num_events, name='agg-bptt-num-events')
+                    variable_summaries(self.times, name='agg-times')
+
+                    self.tf_merged_summaries = tf.summary.merge_all()
 
                 self.norm_grads, self.global_norm = tf.clip_by_global_norm(grads, 100.0)
                 capped_gvs = list(zip(self.norm_grads, vars_))
@@ -257,7 +283,6 @@ class RMTPP:
                                                              global_step=self.global_step)
 
                 self.tf_init = tf.global_variables_initializer()
-                self.tf_merged_summaries = tf.summary.merge_all()
                 # self.check_nan = tf.add_check_numerics_ops()
 
     def initialize(self, finalize=False):
@@ -268,6 +293,52 @@ class RMTPP:
             # This prevents memory leaks by disallowing changes to the graph
             # after initialization.
             self.sess.graph.finalize()
+
+
+    def make_feed_dict(self, training_data, batch_idxes, bptt_idx,
+                       init_hidden_state=None):
+        """Creates a batch for the given batch_idxes starting from bptt_idx.
+        The hidden state will be initialized with all zeros if no such state is
+        provided.
+        """
+
+        if init_hidden_state is None:
+            cur_state = np.zeros((self.BATCH_SIZE, self.HIDDEN_LAYER_SIZE))
+        else:
+            cur_state = init_hidden_state
+
+        train_event_in_seq = training_data['train_event_in_seq']
+        train_time_in_seq = training_data['train_time_in_seq']
+        train_event_out_seq = training_data['train_event_out_seq']
+        train_time_out_seq = training_data['train_event_out_seq']
+
+        batch_event_train_in = train_event_in_seq[batch_idxes, :]
+        batch_event_train_out = train_event_out_seq[batch_idxes, :]
+        batch_time_train_in = train_time_in_seq[batch_idxes, :]
+        batch_time_train_out = train_time_out_seq[batch_idxes, :]
+
+        bptt_range = range(bptt_idx, (bptt_idx + self.BPTT))
+        bptt_event_in = batch_event_train_in[:, bptt_range]
+        bptt_event_out = batch_event_train_out[:, bptt_range]
+        bptt_time_in = batch_time_train_in[:, bptt_range]
+        bptt_time_out = batch_time_train_out[:, bptt_range]
+
+        if bptt_idx > 0:
+            initial_time = batch_time_train_in[:, bptt_idx - 1]
+        else:
+            initial_time = np.zeros(batch_time_train_in.shape[0])
+
+
+        feed_dict = {
+            self.initial_state: cur_state,
+            self.initial_time: initial_time,
+            self.events_in: bptt_event_in,
+            self.events_out: bptt_event_out,
+            self.times_in: bptt_time_in,
+            self.times_out: bptt_time_out
+        }
+
+        return feed_dict
 
     def train(self, training_data, num_epochs=1,
               restart=False, check_nans=False, one_batch=False,
@@ -284,8 +355,6 @@ class RMTPP:
         train_writer = tf.summary.FileWriter(self.SUMMARY_DIR + '/train',
                                              self.sess.graph)
 
-        rs = np.random.RandomState(seed=self.seed)
-
         if ckpt and restart:
             print('Restoring from {}'.format(ckpt.model_checkpoint_path))
             saver.restore(self.sess, ckpt.model_checkpoint_path)
@@ -299,7 +368,7 @@ class RMTPP:
         n_batches = len(idxes) // self.BATCH_SIZE
 
         for epoch in range(self.last_epoch, self.last_epoch + num_epochs):
-            rs.shuffle(idxes)
+            self.rs.shuffle(idxes)
 
             print("Starting epoch...", epoch)
             total_loss = 0.0
@@ -322,8 +391,14 @@ class RMTPP:
                     bptt_time_in = batch_time_train_in[:, bptt_range]
                     bptt_time_out = batch_time_train_out[:, bptt_range]
 
+                    if bptt_idx > 0:
+                        initial_time = batch_time_train_in[:, bptt_idx - 1]
+                    else:
+                        initial_time = np.zeros(batch_time_train_in.shape[0])
+
                     feed_dict = {
                         self.initial_state: cur_state,
+                        self.initial_time: initial_time,
                         self.events_in: bptt_event_in,
                         self.events_out: bptt_event_out,
                         self.times_in: bptt_time_in,
@@ -403,8 +478,14 @@ class RMTPP:
             bptt_event_in = test_event_in_seq[:, bptt_range]
             bptt_time_in = test_time_in_seq[:, bptt_range]
 
+            if bptt_idx > 0:
+                initial_time = batch_time_train_in[:, bptt_idx - 1]
+            else:
+                initial_time = np.zeros(batch_time_train_in.shape[0])
+
             feed_dict = {
                 self.initial_state: cur_state,
+                self.initial_time: inital_time,
                 self.events_in: bptt_event_in,
                 self.times_in: bptt_time_in
             }
