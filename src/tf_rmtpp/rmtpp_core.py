@@ -3,6 +3,7 @@ import numpy as np
 import os
 import decorated_options as Deco
 from .utils import create_dir, variable_summaries
+from scipy.integrate import quad
 
 
 def_opts = Deco.Options(
@@ -23,6 +24,10 @@ def_opts = Deco.Options(
 
     bptt=10
 )
+
+
+def quad_func(t, c, w):
+    return c * t * np.exp(-w * t - (c / w) * (np.exp(-w * t) - 1))
 
 
 class RMTPP:
@@ -87,7 +92,7 @@ class RMTPP:
                 with tf.variable_scope('output'):
                     self.wt = tf.get_variable(name='wt', shape=(1, 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(1.0))
+                                              initializer=tf.constant_initializer(-1.0))
 
                     self.Wy = tf.get_variable(name='Wy', shape=(self.EMBED_SIZE, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
@@ -126,17 +131,16 @@ class RMTPP:
                                                          dtype=self.FLOAT_TYPE,
                                                          name='initial_time')
 
-
                 self.loss = 0.0
                 ones_2d = tf.ones((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
                 ones_1d = tf.ones((self.inf_batch_size,), dtype=self.FLOAT_TYPE)
 
                 self.hidden_states = []
-                self.new_hidden_states = []
                 self.event_preds = []
 
                 self.time_losses = []
                 self.mark_losses = []
+                self.log_lambdas = []
                 self.delta_ts = []
                 self.bptt_num_events = []
                 self.times = []
@@ -154,14 +158,16 @@ class RMTPP:
 
                         # output, state = RNNcell(events_embedded, state)
 
-                        # TODO Does TF automatically broadcast? Then we'll not need multiplication with tf.ones
+                        # TODO Does TF automatically broadcast? Then we'll not
+                        # need multiplication with tf.ones
                         with tf.name_scope('state_recursion'):
                             new_state = tf.clip_by_value(
-                                                 tf.matmul(state, self.Wh) +
-                                                 tf.matmul(events_embedded, self.Wy) +
-                                                 tf.matmul(delta_t, self.Wt) +
-                                                 tf.matmul(ones_2d, self.bh),
-                                                 0.0, 1e6, name='h_t')
+                                tf.matmul(state, self.Wh) +
+                                tf.matmul(events_embedded, self.Wy) +
+                                tf.matmul(delta_t, self.Wt) +
+                                tf.matmul(ones_2d, self.bh),
+                                0.0, 1e9, name='h_t'
+                            )
                             state = tf.where(self.events_in[:, i] > 0, new_state, state)
 
                         with tf.name_scope('loss_calc'):
@@ -171,7 +177,7 @@ class RMTPP:
                                            base_intensity)
 
                             lambda_ = tf.exp(tf.minimum(50.0, log_lambda_), name='lambda_')
-                            wt_non_zero = tf.sign(self.wt) * tf.maximum(1e-6, tf.abs(self.wt))
+                            wt_non_zero = tf.sign(self.wt) * tf.maximum(1e-9, tf.abs(self.wt))
                             log_f_star = (log_lambda_ +
                                           (1.0 / wt_non_zero) * tf.exp(tf.minimum(50.0, tf.matmul(state, self.Vt) + base_intensity)) -
                                           (1.0 / wt_non_zero) * lambda_)
@@ -218,13 +224,13 @@ class RMTPP:
 
                         self.time_losses.append(time_loss)
                         self.mark_losses.append(mark_loss)
+                        self.log_lambdas.append(log_lambda_)
                         self.bptt_num_events.append(num_events)
 
                         self.hidden_states.append(state)
-                        self.new_hidden_states.append(new_state)
                         self.event_preds.append(events_pred)
 
-                        self.delta_ts.append(delta_t)
+                        self.delta_ts.append(tf.clip_by_value(delta_t, 0.0, np.inf))
                         self.times.append(time)
 
                 self.final_state = self.hidden_states[-1]
@@ -265,14 +271,16 @@ class RMTPP:
                     for g, v in zip(grads, vars_):
                         variable_summaries(g, name='grad-' + v.name.split('/')[-1][:-2])
 
+                    variable_summaries(self.loss)
                     variable_summaries(self.hidden_states, name='agg-hidden-states')
                     variable_summaries(self.event_preds, name='agg-event-preds-softmax')
                     variable_summaries(self.time_losses, name='agg-time-losses')
                     variable_summaries(self.mark_losses, name='agg-mark-losses')
-                    variable_summaries(self.mark_losses, name='agg-delta-ts')
-                    variable_summaries(self.new_hidden_states, name='agg-new-hidden-states')
+                    variable_summaries(self.time_losses + self.mark_losses, name='agg-total-losses')
+                    variable_summaries(self.delta_ts, name='agg-delta-ts')
                     variable_summaries(self.bptt_num_events, name='agg-bptt-num-events')
                     variable_summaries(self.times, name='agg-times')
+                    variable_summaries(self.log_lambdas, name='agg-log-lambdas')
 
                     self.tf_merged_summaries = tf.summary.merge_all()
 
@@ -327,7 +335,6 @@ class RMTPP:
             initial_time = batch_time_train_in[:, bptt_idx - 1]
         else:
             initial_time = np.zeros(batch_time_train_in.shape[0])
-
 
         feed_dict = {
             self.initial_state: cur_state,
@@ -422,7 +429,6 @@ class RMTPP:
                                                self.loss,
                                                self.global_step],
                                               feed_dict=feed_dict)
-
                             train_writer.add_summary(summaries, step)
                         else:
                             _, cur_state, loss_ = \
@@ -479,13 +485,13 @@ class RMTPP:
             bptt_time_in = test_time_in_seq[:, bptt_range]
 
             if bptt_idx > 0:
-                initial_time = batch_time_train_in[:, bptt_idx - 1]
+                initial_time = test_event_in_seq[:, bptt_idx - 1]
             else:
-                initial_time = np.zeros(batch_time_train_in.shape[0])
+                initial_time = np.zeros(bptt_time_in.shape[0])
 
             feed_dict = {
                 self.initial_state: cur_state,
-                self.initial_time: inital_time,
+                self.initial_time: initial_time,
                 self.events_in: bptt_event_in,
                 self.times_in: bptt_time_in
             }
@@ -498,4 +504,22 @@ class RMTPP:
             all_hidden_states.extend(bptt_hidden_states)
             all_event_preds.extend(bptt_events_pred)
 
-        return all_hidden_states, all_event_preds
+        # TODO: This calculation is completely ignoring the clipping which
+        # happens during the inference step.
+        [Vt, bt, wt]  = self.sess.run([self.Vt, self.bt, self.wt])
+        all_time_preds = []
+
+        for h_i in all_hidden_states:
+            preds_i = []
+            C = np.exp(np.dot(h_i, Vt) + bt).reshape(-1)
+            # zip takes the shorter of the two sequences.
+            # TODO: Can be parallelized heavily.
+            for c_, t_last in zip(C, test_time_in_seq):
+                # TODO: The sign of wt is correct
+                args = (c_, -wt)
+                val, _err = quad(quad_func, 0, np.inf, args=args)
+                preds_i.append(t_last + val)
+
+            all_time_preds.append(preds_i)
+
+        return np.asarray(all_time_preds), np.asarray(all_event_preds)

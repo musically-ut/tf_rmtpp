@@ -2,6 +2,7 @@ from tensorflow.contrib.keras import preprocessing
 import itertools
 import os
 import tensorflow as tf
+import numpy as np
 
 
 pad_sequences = preprocessing.sequence.pad_sequences
@@ -94,3 +95,14 @@ def variable_summaries(var, name=None):
         tf.summary.scalar('min', tf.reduce_min(var))
         tf.summary.histogram('histogram', var)
 
+
+def mae(time_preds, time_true):
+    """Calculates the MAE between the provided and the given time, ignoring the inf
+    and nans. Returns both the MAE and the number of items considered."""
+    is_finite = np.isfinite(time_preds)
+    return np.mean(np.abs(time_preds - time_true)[is_finite]), np.sum(is_finite)
+
+
+def acc(event_preds, event_true):
+    """Returns the accuracy of the event prediction."""
+    return np.sum(event_preds == event_true) / event_true.shape[0]
