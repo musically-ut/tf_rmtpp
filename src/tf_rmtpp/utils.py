@@ -1,4 +1,5 @@
 from tensorflow.contrib.keras import preprocessing
+from collections import defaultdict
 import itertools
 import os
 import tensorflow as tf
@@ -96,13 +97,48 @@ def variable_summaries(var, name=None):
         tf.summary.histogram('histogram', var)
 
 
-def mae(time_preds, time_true):
+def MAE(time_preds, time_true, events_out):
     """Calculates the MAE between the provided and the given time, ignoring the inf
     and nans. Returns both the MAE and the number of items considered."""
-    is_finite = np.isfinite(time_preds)
-    return np.mean(np.abs(time_preds - time_true)[is_finite]), np.sum(is_finite)
+
+    # Predictions may not cover the entire time dimension.
+    # This clips time_true to the correct size.
+    seq_limit = time_preds.shape[1]
+    clipped_time_true = time_true[:, :seq_limit]
+    clipped_events_out = events_out[:, :seq_limit]
+
+    is_finite = np.isfinite(time_preds) & (clipped_events_out > 0)
+
+    return np.mean(np.abs(time_preds - clipped_time_true)[is_finite]), np.sum(is_finite)
 
 
-def acc(event_preds, event_true):
-    """Returns the accuracy of the event prediction."""
-    return np.sum(event_preds == event_true) / event_true.shape[0]
+def ACC(event_preds, event_true):
+    """Returns the accuracy of the event prediction, provided the output probability vector."""
+    clipped_event_true = event_true[:, :event_preds.shape[1]]
+    is_valid = clipped_event_true > 0
+
+    return np.sum((event_preds.argmax(axis=-1) == clipped_event_true)[is_valid]) / np.sum(is_valid)
+
+
+def calc_base_rate(data):
+    """Calculates the base-rate for intelligent parameter initialization from the training data."""
+    dts = (data['train_time_out_seq'] - data['train_time_in_seq'])[data['train_event_in_seq'] > 0]
+    return 1.0 / np.mean(dts)
+
+
+def calc_base_event_prob(data):
+    """Calculates the base probability of event types for intelligent parameter initialization from the training data."""
+    class_count = defaultdict(lambda: 0.0)
+    for evts in data['train_event_in_seq']:
+        for ev in evts:
+            class_count[ev] += 1.0
+
+    total_events = 0.0
+    probs = []
+    for cat in range(1, data['num_categories'] + 1):
+        total_events += class_count[cat]
+
+    for cat in range(1, data['num_categories'] + 1):
+        probs.append(class_count[cat] / total_events)
+
+    return np.array(probs)
