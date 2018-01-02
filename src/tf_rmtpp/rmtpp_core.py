@@ -447,16 +447,13 @@ class RMTPP:
                         #                   feed_dict=feed_dict)
                     else:
                         if with_summaries:
-                            _, summaries, cur_state, loss_, step, delta_ts = \
+                            _, summaries, cur_state, loss_, step = \
                                 self.sess.run([self.update,
                                                self.tf_merged_summaries,
                                                self.final_state,
                                                self.loss,
-                                               self.global_step,
-                                               self.delta_ts],
+                                               self.global_step],
                                               feed_dict=feed_dict)
-
-                            # print('mean(delta_ts) = {:.3f}'.format(np.mean(delta_ts)))
                             train_writer.add_summary(summaries, step)
                         else:
                             _, cur_state, loss_ = \
@@ -549,6 +546,7 @@ class RMTPP:
             preds_i = []
             C = np.exp(np.dot(h_i, Vt) + bt).reshape(-1)
 
+            # TODO: Can be parallelized heavily.
             for c_, t_last in zip(C, time_in_seq[:, idx]):
                 args = (c_, wt)
                 val, _err = quad(quad_func, 0, np.inf, args=args)
