@@ -2,8 +2,9 @@ import tensorflow as tf
 import numpy as np
 import os
 import decorated_options as Deco
-from .utils import create_dir, variable_summaries
+from .utils import create_dir, variable_summaries, MAE, ACC
 from scipy.integrate import quad
+import multiprocessing as MP
 
 
 def_opts = Deco.Options(
@@ -22,12 +23,21 @@ def_opts = Deco.Options(
     device_gpu='/gpu:0',
     device_cpu='/cpu:0',
 
-    bptt=10
+    base_rate=1.0,  # The underlying base rate of event generation in the dataset.
+
+    bptt=20
 )
 
 
+def softplus(x):
+    """Numpy counterpart to tf.nn.softplus"""
+    return np.log1p(np.exp(x))
+
+
 def quad_func(t, c, w):
-    return c * t * np.exp(-w * t - (c / w) * (np.exp(-w * t) - 1))
+    """This is the t * f(t) function calculating the mean time to next event,
+    given c, w."""
+    return c * t * np.exp(-w * t + (c / w) * (np.exp(-w * t) - 1))
 
 
 class RMTPP:
@@ -35,7 +45,7 @@ class RMTPP:
 
     @Deco.optioned()
     def __init__(self, sess, num_categories, hidden_layer_size, batch_size,
-                 learning_rate, momentum, l2_penalty, embed_size,
+                 learning_rate, momentum, l2_penalty, base_rate, embed_size,
                  float_type, bptt, seed, scope, save_dir,
                  device_gpu, device_cpu, summary_dir):
         self.HIDDEN_LAYER_SIZE = hidden_layer_size
@@ -71,7 +81,6 @@ class RMTPP:
 
                 self.inf_batch_size = tf.shape(self.events_in)[0]
 
-
                 # Make variables
                 with tf.variable_scope('hidden_state'):
                     self.Wt = tf.get_variable(name='Wt',
@@ -87,12 +96,12 @@ class RMTPP:
                                               initializer=tf.constant_initializer(np.eye(self.HIDDEN_LAYER_SIZE)))
                     self.bh = tf.get_variable(name='bh', shape=(1, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(0.0))
+                                              initializer=tf.constant_initializer(1.0))
 
                 with tf.variable_scope('output'):
                     self.wt = tf.get_variable(name='wt', shape=(1, 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(-1.0))
+                                              initializer=tf.constant_initializer(1.0))
 
                     self.Wy = tf.get_variable(name='Wy', shape=(self.EMBED_SIZE, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
@@ -104,10 +113,10 @@ class RMTPP:
                                               initializer=tf.constant_initializer(0.001))
                     self.Vt = tf.get_variable(name='Vt', shape=(self.HIDDEN_LAYER_SIZE, 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(0.0))
+                                              initializer=tf.constant_initializer(0.001))
                     self.bt = tf.get_variable(name='bt', shape=(1, 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(0.0))
+                                              initializer=tf.constant_initializer(np.log(base_rate)))
                     self.bk = tf.get_variable(name='bk', shape=(1, self.NUM_CATEGORIES + 1),
                                               dtype=self.FLOAT_TYPE,
                                               initializer=tf.constant_initializer(0.0))
@@ -118,7 +127,7 @@ class RMTPP:
                 # Add summaries for all (trainable) variables
                 with tf.device(device_cpu):
                     for v in self.all_vars:
-                            variable_summaries(v)
+                        variable_summaries(v)
 
                 # Make graph
                 # RNNcell = RNN_CELL_TYPE(HIDDEN_LAYER_SIZE)
@@ -133,7 +142,7 @@ class RMTPP:
 
                 self.loss = 0.0
                 ones_2d = tf.ones((self.inf_batch_size, 1), dtype=self.FLOAT_TYPE)
-                ones_1d = tf.ones((self.inf_batch_size,), dtype=self.FLOAT_TYPE)
+                # ones_1d = tf.ones((self.inf_batch_size,), dtype=self.FLOAT_TYPE)
 
                 self.hidden_states = []
                 self.event_preds = []
@@ -156,31 +165,47 @@ class RMTPP:
                         self.last_times.append(last_time)
                         last_time = time
 
+                        time_2d = tf.expand_dims(time, axis=-1)
+
                         # output, state = RNNcell(events_embedded, state)
 
                         # TODO Does TF automatically broadcast? Then we'll not
                         # need multiplication with tf.ones
+                        type_delta_t = True
+
                         with tf.name_scope('state_recursion'):
-                            new_state = tf.clip_by_value(
+                            # new_state = tf.clip_by_value(
+                            #     tf.matmul(state, self.Wh) +
+                            #     tf.matmul(events_embedded, self.Wy) +
+                            #     # Two ways of interpretting this term
+                            #     (tf.matmul(delta_t, self.Wt) if type_delta_t else tf.matmul(time_2d, self.Wt)) +
+                            #     tf.matmul(ones_2d, self.bh),
+                            #     0.0, 1e9, name='h_t'
+                            # )
+                            new_state = tf.nn.softplus(
                                 tf.matmul(state, self.Wh) +
                                 tf.matmul(events_embedded, self.Wy) +
-                                tf.matmul(delta_t, self.Wt) +
+                                # Two ways of interpretting this term
+                                (tf.matmul(delta_t, self.Wt) if type_delta_t else tf.matmul(time_2d, self.Wt)) +
                                 tf.matmul(ones_2d, self.bh),
-                                0.0, 1e9, name='h_t'
+                                name='h_t'
                             )
                             state = tf.where(self.events_in[:, i] > 0, new_state, state)
 
                         with tf.name_scope('loss_calc'):
                             base_intensity = tf.matmul(ones_2d, self.bt)
+                            # wt_non_zero = tf.sign(self.wt) * tf.maximum(1e-9, tf.abs(self.wt))
+                            wt_soft_plus = tf.nn.softplus(self.wt)
+
                             log_lambda_ = (tf.matmul(state, self.Vt) +
-                                           delta_t * self.wt +
+                                           (-delta_t * wt_soft_plus) +
                                            base_intensity)
 
                             lambda_ = tf.exp(tf.minimum(50.0, log_lambda_), name='lambda_')
-                            wt_non_zero = tf.sign(self.wt) * tf.maximum(1e-9, tf.abs(self.wt))
-                            log_f_star = (log_lambda_ +
-                                          (1.0 / wt_non_zero) * tf.exp(tf.minimum(50.0, tf.matmul(state, self.Vt) + base_intensity)) -
-                                          (1.0 / wt_non_zero) * lambda_)
+
+                            log_f_star = (log_lambda_ -
+                                          (1.0 / wt_soft_plus) * tf.exp(tf.minimum(50.0, tf.matmul(state, self.Vt) + base_intensity)) +
+                                          (1.0 / wt_soft_plus) * lambda_)
 
                             events_pred = tf.nn.softmax(
                                 tf.minimum(50.0,
@@ -349,7 +374,7 @@ class RMTPP:
 
     def train(self, training_data, num_epochs=1,
               restart=False, check_nans=False, one_batch=False,
-              with_summaries=False):
+              with_summaries=False, with_evals=False):
         """Train the model given the training data."""
         create_dir(self.SAVE_DIR)
         ckpt = tf.train.get_checkpoint_state(self.SAVE_DIR)
@@ -369,7 +394,7 @@ class RMTPP:
         train_event_in_seq = training_data['train_event_in_seq']
         train_time_in_seq = training_data['train_time_in_seq']
         train_event_out_seq = training_data['train_event_out_seq']
-        train_time_out_seq = training_data['train_event_out_seq']
+        train_time_out_seq = training_data['train_time_out_seq']
 
         idxes = list(range(len(train_event_in_seq)))
         n_batches = len(idxes) // self.BATCH_SIZE
@@ -462,6 +487,12 @@ class RMTPP:
         # Remember how many epochs we have trained.
         self.last_epoch += num_epochs
 
+        if with_evals:
+            print('Running evaluation on training data: ...')
+            train_time_preds, train_event_preds = self.predict_train(training_data)
+            self.eval(train_time_preds, train_time_out_seq,
+                      train_event_preds, train_event_out_seq)
+
     def restore(self):
         """Restore the model from saved state."""
         saver = tf.train.Saver(tf.global_variables())
@@ -469,26 +500,26 @@ class RMTPP:
         print('Loading the model from {}'.format(ckpt.model_checkpoint_path))
         saver.restore(self.sess, ckpt.model_checkpoint_path)
 
-    def predict(self, test_data):
-        """Treat the entire test-data as a single batch."""
+    def predict(self, event_in_seq, time_in_seq, single_threaded=False):
+        """Treats the entire dataset as a single batch and processes it."""
 
-        test_event_in_seq = test_data['test_event_in_seq']
-        test_time_in_seq = test_data['test_time_in_seq']
+        # test_event_in_seq = test_data['test_event_in_seq']
+        # test_time_in_seq = test_data['test_time_in_seq']
         # test_time_out_seq = test_data['test_time_out_seq']
         # test_event_out_seq = test_data['test_event_out_seq']
 
         all_hidden_states = []
         all_event_preds = []
 
-        cur_state = np.zeros((len(test_event_in_seq), self.HIDDEN_LAYER_SIZE))
+        cur_state = np.zeros((len(event_in_seq), self.HIDDEN_LAYER_SIZE))
 
-        for bptt_idx in range(0, len(test_event_in_seq[0]) - self.BPTT, self.BPTT):
+        for bptt_idx in range(0, len(event_in_seq[0]) - self.BPTT, self.BPTT):
             bptt_range = range(bptt_idx, (bptt_idx + self.BPTT))
-            bptt_event_in = test_event_in_seq[:, bptt_range]
-            bptt_time_in = test_time_in_seq[:, bptt_range]
+            bptt_event_in = event_in_seq[:, bptt_range]
+            bptt_time_in = time_in_seq[:, bptt_range]
 
             if bptt_idx > 0:
-                initial_time = test_event_in_seq[:, bptt_idx - 1]
+                initial_time = event_in_seq[:, bptt_idx - 1]
             else:
                 initial_time = np.zeros(bptt_time_in.shape[0])
 
@@ -510,19 +541,44 @@ class RMTPP:
         # TODO: This calculation is completely ignoring the clipping which
         # happens during the inference step.
         [Vt, bt, wt]  = self.sess.run([self.Vt, self.bt, self.wt])
-        all_time_preds = []
+        wt = softplus(wt)
 
-        for h_i in all_hidden_states:
+        global _quad_worker
+        def _quad_worker(params):
+            idx, h_i = params
             preds_i = []
             C = np.exp(np.dot(h_i, Vt) + bt).reshape(-1)
-            # zip takes the shorter of the two seqauences.
-            # TODO: Can be parallelized heavily.
-            for c_, t_last in zip(C, test_time_in_seq):
-                # TODO: The sign of wt is correct
-                args = (c_, -wt)
+
+            for c_, t_last in zip(C, time_in_seq[:, idx]):
+                args = (c_, wt)
                 val, _err = quad(quad_func, 0, np.inf, args=args)
                 preds_i.append(t_last + val)
 
-            all_time_preds.append(preds_i)
+            return preds_i
 
-        return np.asarray(all_time_preds), np.asarray(all_event_preds)
+        if single_threaded:
+            all_time_preds = [_quad_worker((idx, x)) for idx, x in enumerate(all_hidden_states)]
+        else:
+            with MP.Pool() as pool:
+                all_time_preds = pool.map(_quad_worker, enumerate(all_hidden_states))
+
+        return np.asarray(all_time_preds).T, np.asarray(all_event_preds).swapaxes(0, 1)
+
+    def eval(self, time_preds, time_true, event_preds, event_true):
+        """Prints evaluation of the model on the given dataset."""
+        # Print test error once every epoch:
+        mae, total_valid = MAE(time_preds, time_true, event_true)
+        print('** MAE = {:.3f}; valid = {}, ACC = {:.3f}'.format(
+            mae, total_valid, ACC(event_preds, event_true)))
+
+    def predict_test(self, data, single_threaded=False):
+        """Make (time, event) predictions on the test data."""
+        return self.predict(event_in_seq=data['test_event_in_seq'],
+                            time_in_seq=data['test_time_in_seq'],
+                            single_threaded=single_threaded)
+
+    def predict_train(self, data, single_threaded=False):
+        """Make (time, event) predictions on the training data."""
+        return self.predict(event_in_seq=data['train_event_in_seq'],
+                            time_in_seq=data['train_time_in_seq'],
+                            single_threaded=single_threaded)
