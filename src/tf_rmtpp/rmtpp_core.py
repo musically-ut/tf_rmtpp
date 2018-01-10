@@ -23,9 +23,18 @@ def_opts = Deco.Options(
     device_gpu='/gpu:0',
     device_cpu='/cpu:0',
 
-    base_rate=1.0,  # The underlying base rate of event generation in the dataset.
+    bptt=20,
 
-    bptt=20
+    Wt=1e-3,
+    Wem=lambda num_categories, embed_size: np.random.RandomState(42).randn(num_categories + 1, embed_size) * 0.01,
+    Wh=lambda hidden_size: np.eye(hidden_size),
+    bh=1.0,
+    wt=1.0,
+    Wy=0.0,
+    Vy=0.001,
+    Vt=lambda hidden_size: 0.001,
+    bt=np.log(1.0), # bt is provided by the base_rate
+    bk=lambda num_categories: 0.0
 )
 
 
@@ -45,9 +54,10 @@ class RMTPP:
 
     @Deco.optioned()
     def __init__(self, sess, num_categories, hidden_layer_size, batch_size,
-                 learning_rate, momentum, l2_penalty, base_rate, embed_size,
+                 learning_rate, momentum, l2_penalty, embed_size,
                  float_type, bptt, seed, scope, save_dir,
-                 device_gpu, device_cpu, summary_dir):
+                 device_gpu, device_cpu, summary_dir,
+                 Wt, Wem, Wh, bh, wt, Wy, Vy, Vt, bk, bt):
         self.HIDDEN_LAYER_SIZE = hidden_layer_size
         self.BATCH_SIZE = batch_size
         self.LEARNING_RATE = learning_rate
@@ -79,6 +89,8 @@ class RMTPP:
                 self.events_out = tf.placeholder(tf.int32, [None, self.BPTT], name='events_out')
                 self.times_out = tf.placeholder(self.FLOAT_TYPE, [None, self.BPTT], name='times_out')
 
+                self.batch_num_events = tf.placeholder(self.FLOAT_TYPE, [], name='bptt_events')
+
                 self.inf_batch_size = tf.shape(self.events_in)[0]
 
                 # Make variables
@@ -86,40 +98,40 @@ class RMTPP:
                     self.Wt = tf.get_variable(name='Wt',
                                               shape=(1, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(1e-3))
+                                              initializer=tf.constant_initializer(Wt))
                     # The first row of Wem is merely a placeholder (will not be trained).
                     self.Wem = tf.get_variable(name='Wem', shape=(self.NUM_CATEGORIES + 1, self.EMBED_SIZE),
                                                dtype=self.FLOAT_TYPE,
-                                               initializer=tf.constant_initializer(self.rs.randn(self.NUM_CATEGORIES + 1, self.EMBED_SIZE) * 0.01))
+                                               initializer=tf.constant_initializer(Wem(self.NUM_CATEGORIES, self.EMBED_SIZE)))
                     self.Wh = tf.get_variable(name='Wh', shape=(self.HIDDEN_LAYER_SIZE, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(np.eye(self.HIDDEN_LAYER_SIZE)))
+                                              initializer=tf.constant_initializer(Wh(self.HIDDEN_LAYER_SIZE)))
                     self.bh = tf.get_variable(name='bh', shape=(1, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(1.0))
+                                              initializer=tf.constant_initializer(bh))
 
                 with tf.variable_scope('output'):
                     self.wt = tf.get_variable(name='wt', shape=(1, 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(1.0))
+                                              initializer=tf.constant_initializer(wt))
 
                     self.Wy = tf.get_variable(name='Wy', shape=(self.EMBED_SIZE, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(0.0))
+                                              initializer=tf.constant_initializer(Wy))
 
                     # The first column of Vy is merely a placeholder (will not be trained).
                     self.Vy = tf.get_variable(name='Vy', shape=(self.HIDDEN_LAYER_SIZE, self.NUM_CATEGORIES + 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(0.001))
+                                              initializer=tf.constant_initializer(Vy))
                     self.Vt = tf.get_variable(name='Vt', shape=(self.HIDDEN_LAYER_SIZE, 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(0.001))
+                                              initializer=tf.constant_initializer(Vt(self.HIDDEN_LAYER_SIZE)))
                     self.bt = tf.get_variable(name='bt', shape=(1, 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(np.log(base_rate)))
+                                              initializer=tf.constant_initializer(bt))
                     self.bk = tf.get_variable(name='bk', shape=(1, self.NUM_CATEGORIES + 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(0.0))
+                                              initializer=tf.constant_initializer(bk(self.NUM_CATEGORIES)))
 
                 self.all_vars = [self.Wt, self.Wem, self.Wh, self.bh,
                                  self.wt, self.Wy, self.Vy, self.Vt, self.bt, self.bk]
