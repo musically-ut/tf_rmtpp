@@ -30,15 +30,15 @@ def_opts = Deco.Options(
     embed_size=__EMBED_SIZE,
     Wem=lambda num_categories: np.random.RandomState(42).randn(num_categories, __EMBED_SIZE) * 0.01,
 
-    Wt=1e-3,
+    Wt=np.ones((1, __HIDDEN_LAYER_SIZE)) * 1e-3,
     Wh=np.eye(__HIDDEN_LAYER_SIZE),
-    bh=1.0,
+    bh=np.ones((1, __HIDDEN_LAYER_SIZE)),
     wt=1.0,
-    Wy=0.0,
-    Vy=0.001,
-    Vt=0.001,
+    Wy=np.ones((__EMBED_SIZE, __HIDDEN_LAYER_SIZE)) * 0.0,
+    Vy=lambda num_categories: np.ones((__HIDDEN_LAYER_SIZE, num_categories)) * 0.001,
+    Vt=np.ones((__HIDDEN_LAYER_SIZE, 1)) * 0.001,
     bt=np.log(1.0), # bt is provided by the base_rate
-    bk=0.0
+    bk=lambda num_categories: np.ones((1, num_categories)) * 0.0
 )
 
 
@@ -126,7 +126,7 @@ class RMTPP:
                     # The first column of Vy is merely a placeholder (will not be trained).
                     self.Vy = tf.get_variable(name='Vy', shape=(self.HIDDEN_LAYER_SIZE, self.NUM_CATEGORIES),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(Vy))
+                                              initializer=tf.constant_initializer(Vy(self.NUM_CATEGORIES)))
                     self.Vt = tf.get_variable(name='Vt', shape=(self.HIDDEN_LAYER_SIZE, 1),
                                               dtype=self.FLOAT_TYPE,
                                               initializer=tf.constant_initializer(Vt))
@@ -135,7 +135,7 @@ class RMTPP:
                                               initializer=tf.constant_initializer(bt))
                     self.bk = tf.get_variable(name='bk', shape=(1, self.NUM_CATEGORIES),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(bk))
+                                              initializer=tf.constant_initializer(bk(num_categories)))
 
                 self.all_vars = [self.Wt, self.Wem, self.Wh, self.bh,
                                  self.wt, self.Wy, self.Vy, self.Vt, self.bt, self.bk]
@@ -356,7 +356,7 @@ class RMTPP:
         """
 
         if init_hidden_state is None:
-            cur_state = np.zeros((self.BATCH_SIZE, self.HIDDEN_LAYER_SIZE))
+            cur_state = np.zeros((len(batch_idxes), self.HIDDEN_LAYER_SIZE))
         else:
             cur_state = init_hidden_state
 
