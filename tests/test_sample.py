@@ -149,9 +149,79 @@ def dummy_data():
     }
 
 
+def dummy_data_with_missing():
+    return {
+        'num_categories': 22,
+        'train_event_in_seq': np.array([[ 9,  9,  4,  4,  4,  4,  5,  4,  4, 10,  1,  9,  0,  0,  0,  0,  0,
+                 0, 0, 0],
+               [ 4,  4,  4,  9, 10,  9, 12,  1,  6,  4,  8, 18,  8,  4,  4,  9,  4,
+                10, 11,  4]], dtype=np.int32),
+        'train_event_out_seq': np.array([[ 9,  4,  4,  4,  4,  5,  4,  4, 10,  1,  9,  4,  9,  4,  9,  8,  8,
+                18,  7,  4],
+               [ 4,  4,  9, 10,  9, 12,  1,  6,  4,  8, 18,  8,  4,  4,  9,  4, 10,
+                11,  4,  9]], dtype=np.int32),
+        'train_time_in_seq': np.array([[ 0.03780895,  0.05659572,  0.0711524 ,  0.09084344,  0.1167087 ,
+                 0.11749727,  0.11836644,  0.12978144,  0.14427023,  0.14588072,
+                 0.17034163,  0.17376789,  0.19021592,  0.21238699,  0.21258176,
+                 0.21540879,  0.21883103,  0.21883143,  0.21883258,  0.22609817],
+               [ 0.02668075,  0.03325118,  0.03622794,  0.08866453,  0.09788354,
+                 0.0990687 ,  0.18555974,  0.1870842 ,  0.21152709,  0.21570823,
+                 0.21883037,  0.21883269,  0.22277321,  0.22378501,  0.23709134,
+                 0.26201022,  0.2624901 ,  0.27474064,  0.29912653,  0.30328643]]),
+        'train_time_out_seq': np.array([[ 0.05659572,  0.0711524 ,  0.09084344,  0.1167087 ,  0.11749727,
+                 0.11836644,  0.12978144,  0.14427023,  0.14588072,  0.17034163,
+                 0.17376789,  0.19021592,  0.21238699,  0.21258176,  0.21540879,
+                 0.21883103,  0.21883143,  0.21883258,  0.22609817,  0.25679366],
+               [ 0.03325118,  0.03622794,  0.08866453,  0.09788354,  0.0990687 ,
+                 0.18555974,  0.1870842 ,  0.21152709,  0.21570823,  0.21883037,
+                 0.21883269,  0.22277321,  0.22378501,  0.23709134,  0.26201022,
+                 0.2624901 ,  0.27474064,  0.29912653,  0.30328643,  0.31445738]])
+    }
+
+
 def test_LL():
     # Step 1: fake data
     data = dummy_data()
+
+    with tf.Session() as sess:
+        rmtpp_mdl = tf_rmtpp.rmtpp_core.RMTPP(
+            sess=sess,
+            num_categories=data['num_categories'],
+            summary_dir='/tmp',
+            _opts=tf_rmtpp.def_opts
+        )
+
+        rmtpp_mdl.initialize(finalize=False)
+
+        f_d = rmtpp_mdl.make_feed_dict(data, [0, 1], 0)
+        np_batch = map_feed_dict_to_np(f_d, rmtpp_mdl=rmtpp_mdl)
+
+        tf_vals = rmtpp_mdl.sess.run(
+            {
+                'loss': rmtpp_mdl.loss,
+                'mark_LLs': rmtpp_mdl.mark_LLs,
+                'time_LLs': rmtpp_mdl.time_LLs,
+                'hidden_states': rmtpp_mdl.hidden_states,
+                'log_lambdas': rmtpp_mdl.log_lambdas,
+                'event_preds': rmtpp_mdl.event_preds
+            },
+            feed_dict=f_d
+        )
+
+        np_vals = numpy_LL(
+            np_batch,
+            num_categories=data['num_categories'],
+            _opts=tf_rmtpp.def_opts
+        )
+
+    tf.reset_default_graph()
+
+    assert np.abs((tf_vals['loss'] - np_vals['loss']) / tf_vals['loss']) < 0.01
+
+
+def test_LL_with_missing():
+    # Step 1: fake data
+    data = dummy_data_with_missing()
 
     with tf.Session() as sess:
         rmtpp_mdl = tf_rmtpp.rmtpp_core.RMTPP(
