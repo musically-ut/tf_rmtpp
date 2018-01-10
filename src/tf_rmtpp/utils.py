@@ -4,6 +4,7 @@ import itertools
 import os
 import tensorflow as tf
 import numpy as np
+import pandas as pd
 
 
 pad_sequences = preprocessing.sequence.pad_sequences
@@ -81,6 +82,56 @@ def read_data(event_train_file, event_test_file, time_train_file, time_test_file
     }
 
 
+def calc_base_rate(data, training=True):
+    """Calculates the base-rate for intelligent parameter initialization from the training data."""
+    suffix = 'train' if training else 'test'
+    in_key = suffix + '_time_in_seq'
+    out_key = suffix + '_time_out_seq'
+    valid_key = suffix + '_event_in_seq'
+
+    dts = (data[out_key] - data[in_key])[data[valid_key] > 0]
+    return 1.0 / np.mean(dts)
+
+
+def calc_base_event_prob(data, training=True):
+    """Calculates the base probability of event types for intelligent parameter initialization from the training data."""
+    dict_key = 'train_event_in_seq' if training else 'test_event_in_seq'
+
+    class_count = defaultdict(lambda: 0.0)
+    for evts in data[dict_key]:
+        for ev in evts:
+            class_count[ev] += 1.0
+
+    total_events = 0.0
+    probs = []
+    for cat in range(1, data['num_categories'] + 1):
+        total_events += class_count[cat]
+
+    for cat in range(1, data['num_categories'] + 1):
+        probs.append(class_count[cat] / total_events)
+
+    return np.array(probs)
+
+
+def data_stats(data):
+    """Prints basic statistics about the dataset."""
+    train_valid = data['train_event_in_seq'] > 0
+    test_valid = data['test_event_in_seq'] > 0
+
+    print('Num categories = ', data['num_categories'])
+    print('delta-t (training) = ')
+    print(pd.Series((data['train_time_out_seq'] - data['train_time_in_seq'])[train_valid]).describe())
+    train_base_rate = calc_base_rate(data, training=True)
+    print('base-rate = {}, log(base_rate) = {}'.format(train_base_rate, np.log(train_base_rate)))
+    print('Class probs = ', calc_base_event_prob(data, training=True))
+
+    print('delta-t (testing) = ')
+    print(pd.Series((data['test_time_out_seq'] - data['test_time_in_seq'])[test_valid]).describe())
+    test_base_rate = calc_base_rate(data, training=False)
+    print('base-rate = {}, log(base_rate) = {}'.format(test_base_rate, np.log(test_base_rate)))
+    print('Class probs = ', calc_base_event_prob(data, training=False))
+
+
 def variable_summaries(var, name=None):
     """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
     if name is None:
@@ -118,27 +169,3 @@ def ACC(event_preds, event_true):
     is_valid = clipped_event_true > 0
 
     return np.sum((event_preds.argmax(axis=-1) == clipped_event_true)[is_valid]) / np.sum(is_valid)
-
-
-def calc_base_rate(data):
-    """Calculates the base-rate for intelligent parameter initialization from the training data."""
-    dts = (data['train_time_out_seq'] - data['train_time_in_seq'])[data['train_event_in_seq'] > 0]
-    return 1.0 / np.mean(dts)
-
-
-def calc_base_event_prob(data):
-    """Calculates the base probability of event types for intelligent parameter initialization from the training data."""
-    class_count = defaultdict(lambda: 0.0)
-    for evts in data['train_event_in_seq']:
-        for ev in evts:
-            class_count[ev] += 1.0
-
-    total_events = 0.0
-    probs = []
-    for cat in range(1, data['num_categories'] + 1):
-        total_events += class_count[cat]
-
-    for cat in range(1, data['num_categories'] + 1):
-        probs.append(class_count[cat] / total_events)
-
-    return np.array(probs)
