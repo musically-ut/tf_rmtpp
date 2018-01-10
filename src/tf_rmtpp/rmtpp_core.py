@@ -7,13 +7,15 @@ from scipy.integrate import quad
 import multiprocessing as MP
 
 
+__EMBED_SIZE = 4
+__HIDDEN_LAYER_SIZE = 16
+
 def_opts = Deco.Options(
-    hidden_layer_size=64,   # 64, 128, 256, 512, 1024
+    # hidden_layer_size=64,   # 64, 128, 256, 512, 1024
     batch_size=64,          # 16, 32, 64
     learning_rate=0.1,      # 0.1, 0.01, 0.001
     momentum=0.9,
     l2_penalty=0.001,
-    embed_size=64,
     float_type=tf.float32,
     seed=42,
     scope='RMTPP',
@@ -25,16 +27,18 @@ def_opts = Deco.Options(
 
     bptt=20,
 
+    embed_size=__EMBED_SIZE,
+    Wem=lambda num_categories: np.random.RandomState(42).randn(num_categories, __EMBED_SIZE) * 0.01,
+
     Wt=1e-3,
-    Wem=lambda num_categories, embed_size: np.random.RandomState(42).randn(num_categories + 1, embed_size) * 0.01,
-    Wh=lambda hidden_size: np.eye(hidden_size),
+    Wh=np.eye(__HIDDEN_LAYER_SIZE),
     bh=1.0,
     wt=1.0,
     Wy=0.0,
     Vy=0.001,
-    Vt=lambda hidden_size: 0.001,
+    Vt=0.001,
     bt=np.log(1.0), # bt is provided by the base_rate
-    bk=lambda num_categories: 0.0
+    bk=0.0
 )
 
 
@@ -53,12 +57,12 @@ class RMTPP:
     """Class implementing the Recurrent Marked Temporal Point Process model."""
 
     @Deco.optioned()
-    def __init__(self, sess, num_categories, hidden_layer_size, batch_size,
+    def __init__(self, sess, num_categories, batch_size,
                  learning_rate, momentum, l2_penalty, embed_size,
                  float_type, bptt, seed, scope, save_dir,
                  device_gpu, device_cpu, summary_dir,
                  Wt, Wem, Wh, bh, wt, Wy, Vy, Vt, bk, bt):
-        self.HIDDEN_LAYER_SIZE = hidden_layer_size
+        self.HIDDEN_LAYER_SIZE = Wh.shape[0]
         self.BATCH_SIZE = batch_size
         self.LEARNING_RATE = learning_rate
         self.MOMENTUM = momentum
@@ -100,12 +104,12 @@ class RMTPP:
                                               dtype=self.FLOAT_TYPE,
                                               initializer=tf.constant_initializer(Wt))
                     # The first row of Wem is merely a placeholder (will not be trained).
-                    self.Wem = tf.get_variable(name='Wem', shape=(self.NUM_CATEGORIES + 1, self.EMBED_SIZE),
+                    self.Wem = tf.get_variable(name='Wem', shape=(self.NUM_CATEGORIES, self.EMBED_SIZE),
                                                dtype=self.FLOAT_TYPE,
-                                               initializer=tf.constant_initializer(Wem(self.NUM_CATEGORIES, self.EMBED_SIZE)))
+                                               initializer=tf.constant_initializer(Wem(self.NUM_CATEGORIES)))
                     self.Wh = tf.get_variable(name='Wh', shape=(self.HIDDEN_LAYER_SIZE, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(Wh(self.HIDDEN_LAYER_SIZE)))
+                                              initializer=tf.constant_initializer(Wh))
                     self.bh = tf.get_variable(name='bh', shape=(1, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
                                               initializer=tf.constant_initializer(bh))
@@ -120,18 +124,18 @@ class RMTPP:
                                               initializer=tf.constant_initializer(Wy))
 
                     # The first column of Vy is merely a placeholder (will not be trained).
-                    self.Vy = tf.get_variable(name='Vy', shape=(self.HIDDEN_LAYER_SIZE, self.NUM_CATEGORIES + 1),
+                    self.Vy = tf.get_variable(name='Vy', shape=(self.HIDDEN_LAYER_SIZE, self.NUM_CATEGORIES),
                                               dtype=self.FLOAT_TYPE,
                                               initializer=tf.constant_initializer(Vy))
                     self.Vt = tf.get_variable(name='Vt', shape=(self.HIDDEN_LAYER_SIZE, 1),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(Vt(self.HIDDEN_LAYER_SIZE)))
+                                              initializer=tf.constant_initializer(Vt))
                     self.bt = tf.get_variable(name='bt', shape=(1, 1),
                                               dtype=self.FLOAT_TYPE,
                                               initializer=tf.constant_initializer(bt))
-                    self.bk = tf.get_variable(name='bk', shape=(1, self.NUM_CATEGORIES + 1),
+                    self.bk = tf.get_variable(name='bk', shape=(1, self.NUM_CATEGORIES),
                                               dtype=self.FLOAT_TYPE,
-                                              initializer=tf.constant_initializer(bk(self.NUM_CATEGORIES)))
+                                              initializer=tf.constant_initializer(bk))
 
                 self.all_vars = [self.Wt, self.Wem, self.Wh, self.bh,
                                  self.wt, self.Wy, self.Vy, self.Vt, self.bt, self.bk]
@@ -167,7 +171,7 @@ class RMTPP:
 
                 with tf.name_scope('BPTT'):
                     for i in range(self.BPTT):
-                        events_embedded = tf.nn.embedding_lookup(self.Wem, self.events_in[:, i])
+                        events_embedded = tf.nn.embedding_lookup(self.Wem, self.events_in[:, i] - 1)
                         time = self.times_in[:, i]
                         time_next = self.times_out[:, i]
 
@@ -233,7 +237,7 @@ class RMTPP:
                                             events_pred,
                                             tf.concat([
                                                 tf.expand_dims(tf.range(self.inf_batch_size), -1),
-                                                tf.expand_dims(self.events_out[:, i], -1)
+                                                tf.expand_dims(tf.mod(self.events_out[:, i] - 1, self.NUM_CATEGORIES), -1)
                                             ], axis=1, name='Pr_next_event'
                                             )
                                         )
