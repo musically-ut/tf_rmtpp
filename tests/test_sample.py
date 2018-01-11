@@ -68,15 +68,22 @@ def numpy_LL(batch, num_categories,
 
         type_delta_t = True
 
-        new_state = np.minimum(
-            1e9,
-            tf_rmtpp.rmtpp_core.softplus(
-                (state @ Wh) +
-                (events_embedded @ Wy) +
-                ((delta_t_prev @ Wt) if type_delta_t else (time_2d @ Wt)) +
-                bh
-            )
+        # new_state = np.minimum(
+        #     1e9,
+        #     tf_rmtpp.rmtpp_core.softplus(
+        #         (state @ Wh) +
+        #         (events_embedded @ Wy) +
+        #         ((delta_t_prev @ Wt) if type_delta_t else (time_2d @ Wt)) +
+        #         bh
+        #     )
+        # )
+        new_state = np.tanh(
+            (state @ Wh) +
+            (events_embedded @ Wy) +
+            ((delta_t_prev @ Wt) if type_delta_t else (time_2d @ Wt)) +
+            bh
         )
+
         state = np.where(events_in[:, i][:, None] > 0, new_state, state)
 
         wt_soft_plus = tf_rmtpp.rmtpp_core.softplus(wt)
@@ -183,6 +190,7 @@ def test_LL():
     # Step 1: fake data
     data = dummy_data()
 
+    tf.reset_default_graph()
     with tf.Session() as sess:
         rmtpp_mdl = tf_rmtpp.rmtpp_core.RMTPP(
             sess=sess,
@@ -213,8 +221,6 @@ def test_LL():
             num_categories=data['num_categories'],
             _opts=tf_rmtpp.def_opts
         )
-
-    tf.reset_default_graph()
 
     assert np.abs((tf_vals['loss'] - np_vals['loss']) / tf_vals['loss']) < 0.01
 
@@ -223,6 +229,7 @@ def test_LL_with_missing():
     # Step 1: fake data
     data = dummy_data_with_missing()
 
+    tf.reset_default_graph()
     with tf.Session() as sess:
         rmtpp_mdl = tf_rmtpp.rmtpp_core.RMTPP(
             sess=sess,
@@ -254,7 +261,6 @@ def test_LL_with_missing():
             _opts=tf_rmtpp.def_opts
         )
 
-    tf.reset_default_graph()
 
     assert np.abs((tf_vals['loss'] - np_vals['loss']) / tf_vals['loss']) < 0.01
 

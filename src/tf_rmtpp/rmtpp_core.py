@@ -15,6 +15,9 @@ def_opts = Deco.Options(
     batch_size=64,          # 16, 32, 64
     learning_rate=0.1,      # 0.1, 0.01, 0.001
     momentum=0.9,
+    decay_steps=10,
+    decay_rate=0.0015,
+
     l2_penalty=0.001,
     float_type=tf.float32,
     seed=42,
@@ -59,7 +62,7 @@ class RMTPP:
     @Deco.optioned()
     def __init__(self, sess, num_categories, batch_size,
                  learning_rate, momentum, l2_penalty, embed_size,
-                 float_type, bptt, seed, scope, save_dir,
+                 float_type, bptt, seed, scope, save_dir, decay_steps, decay_rate,
                  device_gpu, device_cpu, summary_dir,
                  Wt, Wem, Wh, bh, wt, Wy, Vy, Vt, bk, bt):
         self.HIDDEN_LAYER_SIZE = Wh.shape[0]
@@ -197,14 +200,22 @@ class RMTPP:
                             #     tf.matmul(ones_2d, self.bh),
                             #     0.0, 1e9, name='h_t'
                             # )
-                            new_state = tf.minimum(1e9, tf.nn.softplus(
+                            # new_state = tf.minimum(1e9, tf.nn.softplus(
+                            #     tf.matmul(state, self.Wh) +
+                            #     tf.matmul(events_embedded, self.Wy) +
+                            #     # Two ways of interpretting this term
+                            #     (tf.matmul(delta_t_prev, self.Wt) if type_delta_t else tf.matmul(time_2d, self.Wt)) +
+                            #     tf.matmul(ones_2d, self.bh),
+                            #     name='h_t'
+                            # ))
+                            new_state = tf.tanh(
                                 tf.matmul(state, self.Wh) +
                                 tf.matmul(events_embedded, self.Wy) +
                                 # Two ways of interpretting this term
                                 (tf.matmul(delta_t_prev, self.Wt) if type_delta_t else tf.matmul(time_2d, self.Wt)) +
                                 tf.matmul(ones_2d, self.bh),
                                 name='h_t'
-                            ))
+                            )
                             state = tf.where(self.events_in[:, i] > 0, new_state, state)
 
                         with tf.name_scope('loss_calc'):
@@ -286,8 +297,8 @@ class RMTPP:
 
                 self.learning_rate = tf.train.inverse_time_decay(self.LEARNING_RATE,
                                                                  global_step=self.global_step,
-                                                                 decay_steps=10.0,
-                                                                 decay_rate=.001)
+                                                                 decay_steps=decay_steps,
+                                                                 decay_rate=decay_rate)
                 # self.global_step is incremented automatically by the
                 # optimizer.
 
