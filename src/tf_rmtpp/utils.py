@@ -16,7 +16,8 @@ def create_dir(dirname):
         os.makedirs(dirname)
 
 
-def read_data(event_train_file, event_test_file, time_train_file, time_test_file):
+def read_data(event_train_file, event_test_file, time_train_file, time_test_file,
+              pad=True):
     """Read data from given files and return it as a dictionary."""
 
     with open(event_train_file, 'r') as in_file:
@@ -50,20 +51,33 @@ def read_data(event_train_file, event_test_file, time_train_file, time_test_file
     timeTrainIn = [[(y - minTime) / (maxTime - minTime) for y in x[:-1]] for x in timeTrain]
     timeTrainOut = [[(y - minTime) / (maxTime - minTime) for y in x[1:]] for x in timeTrain]
 
-    train_event_in_seq = pad_sequences(eventTrainIn, padding='post')
-    train_event_out_seq = pad_sequences(eventTrainOut, padding='post')
-    train_time_in_seq = pad_sequences(timeTrainIn, dtype=float, padding='post')
-    train_time_out_seq = pad_sequences(timeTrainOut, dtype=float, padding='post')
+    if pad:
+        train_event_in_seq = pad_sequences(eventTrainIn, padding='post')
+        train_event_out_seq = pad_sequences(eventTrainOut, padding='post')
+        train_time_in_seq = pad_sequences(timeTrainIn, dtype=float, padding='post')
+        train_time_out_seq = pad_sequences(timeTrainOut, dtype=float, padding='post')
+    else:
+        train_event_in_seq = eventTrainIn
+        train_event_out_seq = eventTrainOut
+        train_time_in_seq = timeTrainIn
+        train_time_out_seq = timeTrainOut
+
 
     eventTestIn = [x[:-1] for x in eventTest]
     eventTestOut = [x[1:] for x in eventTest]
     timeTestIn = [[(y - minTime) / (maxTime - minTime) for y in x[:-1]] for x in timeTest]
     timeTestOut = [[(y - minTime) / (maxTime - minTime) for y in x[1:]] for x in timeTest]
 
-    test_event_in_seq = pad_sequences(eventTestIn, padding='post')
-    test_event_out_seq = pad_sequences(eventTestOut, padding='post')
-    test_time_in_seq = pad_sequences(timeTestIn, dtype=float, padding='post')
-    test_time_out_seq = pad_sequences(timeTestOut, dtype=float, padding='post')
+    if pad:
+        test_event_in_seq = pad_sequences(eventTestIn, padding='post')
+        test_event_out_seq = pad_sequences(eventTestOut, padding='post')
+        test_time_in_seq = pad_sequences(timeTestIn, dtype=float, padding='post')
+        test_time_out_seq = pad_sequences(timeTestOut, dtype=float, padding='post')
+    else:
+        test_event_in_seq = eventTestIn
+        test_event_out_seq = eventTestOut
+        test_time_in_seq = timeTestIn
+        test_time_out_seq = timeTestOut
 
     return {
         'train_event_in_seq': train_event_in_seq,
@@ -131,6 +145,12 @@ def data_stats(data):
     print('base-rate = {}, log(base_rate) = {}'.format(test_base_rate, np.log(test_base_rate)))
     print('Class probs = ', calc_base_event_prob(data, training=False))
 
+    print('Training sequence lenghts = ')
+    print(pd.Series(train_valid.sum(axis=1)).describe())
+
+    print('Testing sequence lenghts = ')
+    print(pd.Series(test_valid.sum(axis=1)).describe())
+
 
 def variable_summaries(var, name=None):
     """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
@@ -168,4 +188,7 @@ def ACC(event_preds, event_true):
     clipped_event_true = event_true[:, :event_preds.shape[1]]
     is_valid = clipped_event_true > 0
 
-    return np.sum((event_preds.argmax(axis=-1) == clipped_event_true)[is_valid]) / np.sum(is_valid)
+    # The indexes start from 0 whereare event_preds start from 1.
+    highest_prob_ev = event_preds.argmax(axis=-1) + 1
+
+    return np.sum((highest_prob_ev == clipped_event_true)[is_valid]) / np.sum(is_valid)

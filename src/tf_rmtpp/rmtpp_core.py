@@ -15,8 +15,8 @@ def_opts = Deco.Options(
     batch_size=64,          # 16, 32, 64
     learning_rate=0.1,      # 0.1, 0.01, 0.001
     momentum=0.9,
-    decay_steps=10,
-    decay_rate=0.0015,
+    decay_steps=100,
+    decay_rate=0.001,
 
     l2_penalty=0.001,
     float_type=tf.float32,
@@ -327,10 +327,11 @@ class RMTPP:
                 capped_gvs = list(zip(self.norm_grads, vars_))
 
                 with tf.device(device_cpu):
-                    for g, v in zip(grads, vars_):
-                        variable_summaries(g, name='grad-' + v.name.split('/')[-1][:-2])
+                    tf.contrib.training.add_gradients_summaries(self.gvs)
+                    # for g, v in zip(grads, vars_):
+                    #     variable_summaries(g, name='grad-' + v.name.split('/')[-1][:-2])
 
-                    variable_summaries(self.loss)
+                    variable_summaries(self.loss, name='loss')
                     variable_summaries(self.hidden_states, name='agg-hidden-states')
                     variable_summaries(self.event_preds, name='agg-event-preds-softmax')
                     variable_summaries(self.time_LLs, name='agg-time-LL')
@@ -407,7 +408,11 @@ class RMTPP:
     def train(self, training_data, num_epochs=1,
               restart=False, check_nans=False, one_batch=False,
               with_summaries=False, with_evals=False):
-        """Train the model given the training data."""
+        """Train the model given the training data.
+
+        If with_evals is an integer, then that many elements from the test set
+        will be tested.
+        """
         create_dir(self.SAVE_DIR)
         ckpt = tf.train.get_checkpoint_state(self.SAVE_DIR)
 
@@ -456,6 +461,12 @@ class RMTPP:
                     bptt_event_out = batch_event_train_out[:, bptt_range]
                     bptt_time_in = batch_time_train_in[:, bptt_range]
                     bptt_time_out = batch_time_train_out[:, bptt_range]
+
+                    if np.all(bptt_event_in[:, 0] == 0):
+                        # print('Breaking at bptt_idx {} / {}'
+                        #       .format(bptt_idx // self.BPTT,
+                        #               (len(batch_event_train_in[0]) - self.BPTT) // self.BPTT))
+                        break
 
                     if bptt_idx > 0:
                         initial_time = batch_time_train_in[:, bptt_idx - 1]
@@ -520,10 +531,16 @@ class RMTPP:
         self.last_epoch += num_epochs
 
         if with_evals:
+            if isinstance(with_evals, int):
+                batch_size = with_evals
+            else:
+                batch_size = len(training_data['train_event_in_seq'])
+
             print('Running evaluation on training data: ...')
-            train_time_preds, train_event_preds = self.predict_train(training_data)
-            self.eval(train_time_preds, train_time_out_seq,
-                      train_event_preds, train_event_out_seq)
+            train_time_preds, train_event_preds = self.predict_train(training_data,
+                                                                     batch_size=batch_size)
+            self.eval(train_time_preds[0:batch_size], train_time_out_seq[0:batch_size],
+                      train_event_preds[0:batch_size], train_event_out_seq[0:batch_size])
 
     def restore(self):
         """Restore the model from saved state."""
@@ -610,8 +627,11 @@ class RMTPP:
                             time_in_seq=data['test_time_in_seq'],
                             single_threaded=single_threaded)
 
-    def predict_train(self, data, single_threaded=False):
+    def predict_train(self, data, single_threaded=False, batch_size=None):
         """Make (time, event) predictions on the training data."""
-        return self.predict(event_in_seq=data['train_event_in_seq'],
-                            time_in_seq=data['train_time_in_seq'],
+        if batch_size == None:
+            batch_size = data['train_event_in_seq'].shape[0]
+
+        return self.predict(event_in_seq=data['train_event_in_seq'][0:batch_size, :],
+                            time_in_seq=data['train_time_in_seq'][0:batch_size, :],
                             single_threaded=single_threaded)
