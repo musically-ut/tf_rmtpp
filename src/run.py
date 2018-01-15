@@ -61,16 +61,16 @@ def cmd(event_train_file, time_train_file, event_test_file, time_test_file,
 
     if train_eval:
         print('\nEvaluation on training data:')
-        train_time_preds, train_events_preds = rmtpp_mdl.predict_train(data=data)
+        train_time_preds, train_event_preds = rmtpp_mdl.predict_train(data=data)
         rmtpp_mdl.eval(train_time_preds, data['train_time_out_seq'],
                        train_event_preds, data['train_event_out_seq'])
         print()
 
     if test_eval:
         print('\nEvaluation on testing data:')
-        test_time_preds, test_events_preds = rmtpp_mdl.predict_test(data=data)
+        test_time_preds, test_event_preds = rmtpp_mdl.predict_test(data=data)
         rmtpp_mdl.eval(test_time_preds, data['test_time_out_seq'],
-                       test_events_preds, data['test_event_out_seq'])
+                       test_event_preds, data['test_event_out_seq'])
 
     print()
 
