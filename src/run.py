@@ -4,6 +4,8 @@ import tf_rmtpp
 import tensorflow as tf
 import tempfile
 
+def_opts = tf_rmtpp.rmtpp_core.def_opts
+
 @click.command()
 @click.argument('event_train_file')
 @click.argument('time_train_file')
@@ -14,8 +16,13 @@ import tempfile
 @click.option('--restart/--no-restart', 'restart', help='Can restart from a saved model from the summary folder, if available.', default=False)
 @click.option('--train-eval/--no-train-eval', 'train_eval', help='Should evaluate the model on training data?', default=False)
 @click.option('--test-eval/--no-test-eval', 'test_eval', help='Should evaluate the model on test data?', default=True)
+@click.option('--scale', 'scale', help='Constant to scale the time fields by.', default=1.0)
+@click.option('--batch-size', 'batch_size', help='Batch size.', default=def_opts.batch_size)
+@click.option('--bptt', 'bptt', help='Series dependence depth.', default=def_opts.bptt)
+@click.option('--init-learning-rate', 'learning_rate', help='Initial learning rate.', default=def_opts.learning_rate)
 def cmd(event_train_file, time_train_file, event_test_file, time_test_file,
-        summary_dir, num_epochs, restart, train_eval, test_eval):
+        summary_dir, num_epochs, restart, train_eval, test_eval, scale,
+        batch_size, bptt, learning_rate):
     """Read data from EVENT_TRAIN_FILE, TIME_TRAIN_FILE and try to predict the values in EVENT_TEST_FILE, TIME_TEST_FILE."""
     data = tf_rmtpp.utils.read_data(
         event_train_file=event_train_file,
@@ -23,6 +30,12 @@ def cmd(event_train_file, time_train_file, event_test_file, time_test_file,
         time_train_file=time_train_file,
         time_test_file=time_test_file
     )
+
+    data['train_time_out_seq'] /= scale
+    data['train_time_in_seq'] /= scale
+    data['test_time_out_seq'] /= scale
+    data['test_time_in_seq'] /= scale
+
     tf.reset_default_graph()
     sess = tf.Session()
 
@@ -32,6 +45,9 @@ def cmd(event_train_file, time_train_file, event_test_file, time_test_file,
         sess=sess,
         num_categories=data['num_categories'],
         summary_dir=summary_dir if summary_dir is not None else tempfile.mkdtemp(),
+        batch_size=batch_size,
+        bptt=bptt,
+        learning_rate=learning_rate,
         _opts=tf_rmtpp.rmtpp_core.def_opts
     )
 
