@@ -8,18 +8,20 @@ import multiprocessing as MP
 
 
 __EMBED_SIZE = 4
-__HIDDEN_LAYER_SIZE = 16
+__HIDDEN_LAYER_SIZE = 16  # 64, 128, 256, 512, 1024
 
 def_opts = Deco.Options(
-    # hidden_layer_size=64,   # 64, 128, 256, 512, 1024
     batch_size=64,          # 16, 32, 64
+
     learning_rate=0.1,      # 0.1, 0.01, 0.001
     momentum=0.9,
     decay_steps=100,
     decay_rate=0.001,
 
-    l2_penalty=0.001,
+    l2_penalty=0.001,         # Unused
+
     float_type=tf.float32,
+
     seed=42,
     scope='RMTPP',
     save_dir='./save.rmtpp/',
@@ -106,7 +108,17 @@ class RMTPP:
                                               shape=(1, self.HIDDEN_LAYER_SIZE),
                                               dtype=self.FLOAT_TYPE,
                                               initializer=tf.constant_initializer(Wt))
-                    # The first row of Wem is merely a placeholder (will not be trained).
+
+                    # TODO: Generalize to multiple marks (need to be predicted
+                    # for future events) and context for the present event
+                    # (which need not be predicted).
+                    # self.Wem will be converted to a list of embedding
+                    # matrices depending on the number of marks or contexts
+                    # each event has.
+                    # A similar self.Wctx will also be needed to embed
+                    # contextual data.
+                    # The marks can then be independently constructed from the
+                    # hidden state by a similar list of matrices from self.Wy.
                     self.Wem = tf.get_variable(name='Wem', shape=(self.NUM_CATEGORIES, self.EMBED_SIZE),
                                                dtype=self.FLOAT_TYPE,
                                                initializer=tf.constant_initializer(Wem(self.NUM_CATEGORIES)))
@@ -444,7 +456,15 @@ class RMTPP:
             total_loss = 0.0
 
             for batch_idx in range(n_batches):
-                # TODO: This is horribly inefficient. Move this to a separate thread using FIFOQueues.
+                # TODO: This is horribly inefficient. Move this to a separate
+                # thread using FIFOQueues.
+                # However, the previous state from BPTT still needs to be
+                # passed to the next BPTT batch. To make this efficient, we
+                # will need to set and preserve the previous state in a
+                # tf.Variable.
+                #  - Sounds like a job for tf.placeholder_with_default?
+                #  - Or, of a variable with optinal default?
+
                 batch_idxes = idxes[batch_idx * self.BATCH_SIZE:(batch_idx + 1) * self.BATCH_SIZE]
                 batch_event_train_in = train_event_in_seq[batch_idxes, :]
                 batch_event_train_out = train_event_out_seq[batch_idxes, :]
@@ -552,11 +572,6 @@ class RMTPP:
     def predict(self, event_in_seq, time_in_seq, single_threaded=False):
         """Treats the entire dataset as a single batch and processes it."""
 
-        # test_event_in_seq = test_data['test_event_in_seq']
-        # test_time_in_seq = test_data['test_time_in_seq']
-        # test_time_out_seq = test_data['test_time_out_seq']
-        # test_event_out_seq = test_data['test_event_out_seq']
-
         all_hidden_states = []
         all_event_preds = []
 
@@ -598,7 +613,6 @@ class RMTPP:
             preds_i = []
             C = np.exp(np.dot(h_i, Vt) + bt).reshape(-1)
 
-            # TODO: Can be parallelized heavily.
             for c_, t_last in zip(C, time_in_seq[:, idx]):
                 args = (c_, wt)
                 val, _err = quad(quad_func, 0, np.inf, args=args)
