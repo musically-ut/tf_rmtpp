@@ -20,9 +20,10 @@ def_opts = tf_rmtpp.rmtpp_core.def_opts
 @click.option('--batch-size', 'batch_size', help='Batch size.', default=def_opts.batch_size)
 @click.option('--bptt', 'bptt', help='Series dependence depth.', default=def_opts.bptt)
 @click.option('--init-learning-rate', 'learning_rate', help='Initial learning rate.', default=def_opts.learning_rate)
+@click.option('--cpu-only/--no-cpu-only', 'cpu_only', help='Use only the CPU.', default=def_opts.cpu_only)
 def cmd(event_train_file, time_train_file, event_test_file, time_test_file,
         summary_dir, num_epochs, restart, train_eval, test_eval, scale,
-        batch_size, bptt, learning_rate):
+        batch_size, bptt, learning_rate, cpu_only):
     """Read data from EVENT_TRAIN_FILE, TIME_TRAIN_FILE and try to predict the values in EVENT_TEST_FILE, TIME_TEST_FILE."""
     data = tf_rmtpp.utils.read_data(
         event_train_file=event_train_file,
@@ -48,6 +49,7 @@ def cmd(event_train_file, time_train_file, event_test_file, time_test_file,
         batch_size=batch_size,
         bptt=bptt,
         learning_rate=learning_rate,
+        cpu_only=cpu_only,
         _opts=tf_rmtpp.rmtpp_core.def_opts
     )
 

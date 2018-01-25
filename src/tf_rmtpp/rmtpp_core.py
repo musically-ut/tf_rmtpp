@@ -31,6 +31,7 @@ def_opts = Deco.Options(
     device_cpu='/cpu:0',
 
     bptt=20,
+    cpu_only=False,
 
     embed_size=__EMBED_SIZE,
     Wem=lambda num_categories: np.random.RandomState(42).randn(num_categories, __EMBED_SIZE) * 0.01,
@@ -65,7 +66,7 @@ class RMTPP:
     def __init__(self, sess, num_categories, batch_size,
                  learning_rate, momentum, l2_penalty, embed_size,
                  float_type, bptt, seed, scope, save_dir, decay_steps, decay_rate,
-                 device_gpu, device_cpu, summary_dir,
+                 device_gpu, device_cpu, summary_dir, cpu_only,
                  Wt, Wem, Wh, bh, wt, Wy, Vy, Vt, bk, bt):
         self.HIDDEN_LAYER_SIZE = Wh.shape[0]
         self.BATCH_SIZE = batch_size
@@ -90,7 +91,7 @@ class RMTPP:
         self.rs = np.random.RandomState(seed + 42)
 
         with tf.variable_scope(scope):
-            with tf.device(device_gpu):
+            with tf.device(device_gpu if not cpu_only else device_cpu):
                 # Make input variables
                 self.events_in = tf.placeholder(tf.int32, [None, self.BPTT], name='events_in')
                 self.times_in = tf.placeholder(self.FLOAT_TYPE, [None, self.BPTT], name='times_in')
@@ -186,7 +187,9 @@ class RMTPP:
 
                 with tf.name_scope('BPTT'):
                     for i in range(self.BPTT):
-                        events_embedded = tf.nn.embedding_lookup(self.Wem, self.events_in[:, i] - 1)
+
+                        events_embedded = tf.nn.embedding_lookup(self.Wem,
+                                                                 tf.mod(self.events_in[:, i] - 1, self.NUM_CATEGORIES))
                         time = self.times_in[:, i]
                         time_next = self.times_out[:, i]
 
