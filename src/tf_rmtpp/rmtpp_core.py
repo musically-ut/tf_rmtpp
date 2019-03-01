@@ -244,9 +244,12 @@ class RMTPP:
 
                             lambda_ = tf.exp(tf.minimum(50.0, log_lambda_), name='lambda_')
 
-                            log_f_star = (log_lambda_ -
-                                          (1.0 / wt_soft_plus) * tf.exp(tf.minimum(50.0, tf.matmul(state, self.Vt) + base_intensity)) +
-                                          (1.0 / wt_soft_plus) * lambda_)
+#                             log_f_star = (log_lambda_ -
+#                                           (1.0 / wt_soft_plus) * tf.exp(tf.minimum(50.0, tf.matmul(state, self.Vt) + base_intensity)) +
+#                                           (1.0 / wt_soft_plus) * lambda_)
+                            log_f_star = (log_lambda_ +
+                                           (1.0 / wt_soft_plus) * tf.exp(tf.minimum(50.0, tf.matmul(state, self.Vt) + base_intensity)) -
+                                           (1.0 / wt_soft_plus) * lambda_)
 
                             events_pred = tf.nn.softmax(
                                 tf.minimum(50.0,
