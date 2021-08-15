@@ -14,6 +14,7 @@ An (unofficial) implementation of `Recurrent Marked Temporal Point Processes <ht
 Citation:
 
     Du, N., Dai, H., Trivedi, R., Upadhyay, U., Gomez-Rodriguez, M., & Song, L. (2016, August). Recurrent marked temporal point processes: Embedding event history to vector. In Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining (pp. 1555-1564). ACM.
+   
 
 Usage
 -----
@@ -45,3 +46,8 @@ Authors
 -------
 
 `tf_rmtpp` was written by `Utkarsh Upadhyay <musically.ut@gmail.com>`_.
+
+Other implementations
+---------------------
+
+Checkout `woshiyyya/ERPP-RMTPP <https://github.com/woshiyyya/ERPP-RMTPP>`_ for an implementation based on `PyTorch`.
